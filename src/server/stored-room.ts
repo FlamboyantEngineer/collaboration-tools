@@ -51,6 +51,13 @@ function startGeneration(doc: Doc) {
 type StoredRead =
   Exclude<RoomLoadResult, { status: 'found' }> | { status: 'found'; revision: string; doc: Doc };
 
+/** Stored documents and seeds must stand alone, with nothing deferred until a later write. */
+function applyCompleteUpdate(doc: Doc, update: Uint8Array) {
+  applyUpdate(doc, update);
+  if (doc.store.pendingStructs || doc.store.pendingDs)
+    throw new Error('The room update has missing dependencies.');
+}
+
 /** Loads a room's state; a found state that cannot be applied reads as corrupt. */
 async function readStored(name: string, host: ResolvedRoomHost): Promise<StoredRead> {
   let loaded: RoomLoadResult;
@@ -63,7 +70,7 @@ async function readStored(name: string, host: ResolvedRoomHost): Promise<StoredR
   const { update, revision, sequence } = loaded.state;
   const doc = new Doc();
   try {
-    applyUpdate(doc, update);
+    applyCompleteUpdate(doc, update);
     return { status: 'found', revision, doc };
   } catch (error) {
     doc.destroy();
@@ -76,7 +83,7 @@ async function seedDoc(name: string, host: ResolvedRoomHost): Promise<Doc> {
   const seed = await host.seeds.seed(name);
   const doc = new Doc();
   try {
-    if (seed) applyUpdate(doc, seed);
+    if (seed) applyCompleteUpdate(doc, seed);
   } catch (error) {
     doc.destroy();
     throw error;

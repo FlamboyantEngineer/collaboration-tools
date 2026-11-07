@@ -93,6 +93,7 @@ export function openSocketSession(
     return true;
   };
 
+  staleCheck.start();
   socket.onopen = () => {
     open = true;
     lastMessageAt = clock.now();

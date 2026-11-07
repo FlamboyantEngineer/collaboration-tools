@@ -50,6 +50,8 @@ export interface ConnectionDependencies {
   onStateless: ((message: RoomStatelessMessage) => void) | undefined;
   /** Called each time a connection joins its room. */
   onJoin(): void;
+  /** Shutdown callbacks for every connection, including those awaiting admission. */
+  connections: Set<() => void>;
 }
 
 type RoomAdmitted = Extract<RoomAdmission, { ok: true }>;
@@ -68,11 +70,14 @@ interface Connection {
   queue: Uint8Array[];
   context: MemberContext | null;
   closed: boolean;
+  onClosed(): void;
   /** Stops refreshing the connection's decision. */
   stopReauthorization: (() => void) | null;
 }
 
 function leave(connection: Connection) {
+  connection.queue.length = 0;
+  connection.onClosed();
   connection.stopReauthorization?.();
   connection.stopReauthorization = null;
   if (!connection.context) return;
@@ -85,8 +90,11 @@ function leave(connection: Connection) {
 function close(connection: Connection, code: number, reason: string) {
   if (connection.closed) return;
   connection.closed = true;
-  connection.socket.close(code, reason);
-  leave(connection);
+  try {
+    connection.socket.close(code, reason);
+  } finally {
+    leave(connection);
+  }
 }
 
 /** Tells the client why, so it stops reconnecting, and closes the socket. */
@@ -199,8 +207,12 @@ async function join(connection: Connection, request: RoomServerRequest) {
     registry.release(load.room);
     return refuse(connection, 'generation-mismatch', CLOSE_CODES.gone);
   }
+  if (admission.expiresAt !== undefined && host.clock.now() >= admission.expiresAt) {
+    registry.release(load.room);
+    return close(connection, CLOSE_CODES.unauthenticated, 'expired');
+  }
   enter(connection, load.room, admission);
-  if (admission.expiresAt !== undefined) {
+  if (!connection.closed && admission.expiresAt !== undefined) {
     const refresh = { room: name, token, params, headers: request.headers, actor: admission.actor };
     startRefreshing(connection, refresh, admission.expiresAt);
   }
@@ -215,6 +227,7 @@ export function connectMember(
   request: RoomServerRequest,
   dependencies: ConnectionDependencies,
 ): RoomServerConnection {
+  const shutdown = () => close(connection, CLOSE_CODES.shutdown, 'shutdown');
   const connection: Connection = {
     socket,
     dependencies,
@@ -222,7 +235,9 @@ export function connectMember(
     context: null,
     closed: false,
     stopReauthorization: null,
+    onClosed: () => dependencies.connections.delete(shutdown),
   };
+  dependencies.connections.add(shutdown);
   join(connection, request).catch((error: unknown) => {
     dependencies.host.logger.error('Admitting a connection failed.', { error });
     close(connection, CLOSE_CODES.unavailable, 'unavailable');

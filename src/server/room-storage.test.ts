@@ -1,11 +1,17 @@
 import { applyUpdate, Doc, encodeStateAsUpdate } from '@y/y';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createManualClock } from '../../test/manual-clock.js';
+import { createDeferred } from '../../test/promise-fixtures.js';
 import { connectToServer, settle } from '../../test/server-sockets.js';
 import { createRoomProvider, type RoomProvider } from '../client/room-provider.js';
 import { CLOSE_CODES } from '../protocol/messages.js';
 import { GENERATION_KEY, ROOM_META_TYPE } from '../protocol/room-meta.js';
-import type { RoomLoadResult, RoomPersistence, RoomStoreResult } from './host/adapters.js';
+import type {
+  RoomAdmission,
+  RoomLoadResult,
+  RoomPersistence,
+  RoomStoreResult,
+} from './host/adapters.js';
 import { createMemoryPersistence } from './host/memory-persistence.js';
 import { createRoomServer, type RoomServer } from './room-server.js';
 
@@ -221,5 +227,52 @@ describe('room storage', () => {
     expect(closes).toEqual([CLOSE_CODES.shutdown]);
     expect(server.roomCount()).toBe(0);
     await expect(server.openRoom('notes')).rejects.toThrow('closed');
+  });
+});
+
+describe('shutdown races', () => {
+  it('COLLAB-SERVER-4.5 closes connections still awaiting admission', async () => {
+    const admission = createDeferred<RoomAdmission>();
+    const clock = createManualClock();
+    const persistence = createMemoryPersistence();
+    const server = createRoomServer({
+      host: {
+        auth: { admit: () => admission.promise },
+        persistence,
+        clock,
+      },
+    });
+    servers.push(server);
+    const close = vi.fn();
+    const send = vi.fn();
+    server.connect({ send, close }, { url: '/live/notes', headers: {} });
+
+    await server.close();
+    expect(close).toHaveBeenCalledWith(CLOSE_CODES.shutdown, 'shutdown');
+    admission.resolve({ ok: true, actor: { id: 'u' }, access: 'read-write' });
+    await settle();
+    expect(send).not.toHaveBeenCalled();
+    expect(server.roomCount()).toBe(0);
+    expect(clock.pendingDelays()).toEqual([]);
+    expect(persistence.peek('notes')).toBeUndefined();
+  });
+
+  it('COLLAB-SERVER-4.5 rejects a pending handle and makes every close wait for loading', async () => {
+    const loading = createDeferred<RoomLoadResult>();
+    const memory = createMemoryPersistence();
+    const { server, clock } = serve({ ...memory, load: () => loading.promise });
+    const opened = expect(server.openRoom('notes')).rejects.toThrow('closed');
+    const first = server.close();
+    let closed = false;
+    const second = server.close().then(() => {
+      closed = true;
+    });
+    await settle();
+    expect(closed).toBe(false);
+    loading.resolve({ status: 'missing' });
+    await Promise.all([first, second, opened]);
+
+    expect(server.roomCount()).toBe(0);
+    expect(clock.pendingDelays()).toEqual([]);
   });
 });

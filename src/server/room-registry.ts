@@ -1,5 +1,6 @@
 import type { ResolvedRoomHost } from './host/host.js';
 import { type LiveRoom, loadRoom, type RoomLoad, type StoreTiming } from './live-room.js';
+import { toError } from './stored-room.js';
 
 export interface RoomRegistryOptions {
   host: ResolvedRoomHost;
@@ -79,7 +80,9 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
   };
 
   const create = (name: string): Entry => {
-    const load = loadRoom({ name, host: options.host, timing: options.timing, onConflict });
+    const load = loadRoom({ name, host: options.host, timing: options.timing, onConflict }).catch(
+      (error: unknown): RoomLoad => ({ ok: false, error: toError(error) }),
+    );
     const entry: Entry = {
       name,
       load: load.then((result) => settle(entry, result)),

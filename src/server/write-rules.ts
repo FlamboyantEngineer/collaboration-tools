@@ -22,7 +22,8 @@ export type WriteDecision =
 function mayChange(rules: RoomWriteRules, type: string, capabilities: ReadonlySet<string>) {
   // The library's own metadata is server-only in every room.
   if (type === ROOM_META_TYPE || rules.serverOnly?.includes(type)) return false;
-  const needed = rules.required?.[type] ?? rules.otherwise;
+  const required = rules.required;
+  const needed = required && Object.hasOwn(required, type) ? required[type] : rules.otherwise;
   return needed === undefined || capabilities.has(needed);
 }
 

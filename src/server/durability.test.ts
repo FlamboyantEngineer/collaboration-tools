@@ -1,4 +1,4 @@
-import { applyUpdate, Doc, encodeStateAsUpdate } from '@y/y';
+import { applyUpdate, Doc, encodeStateAsUpdate, encodeStateVector } from '@y/y';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createManualClock } from '../../test/manual-clock.js';
 import { connectToServer, settle } from '../../test/server-sockets.js';
@@ -299,5 +299,80 @@ describe('room metrics', () => {
         bytes: expect.any(Number) as number,
       },
     ]);
+  });
+});
+
+describe('incomplete stored updates', () => {
+  function incompleteUpdate() {
+    const writer = new Doc();
+    writer.get('text').insert(0, 'a');
+    const before = encodeStateVector(writer);
+    writer.get('text').insert(1, 'b');
+    const update = encodeStateAsUpdate(writer, before);
+    writer.destroy();
+    return update;
+  }
+
+  it('COLLAB-SERVER-4.1 treats a stored update with missing dependencies as corrupt', async () => {
+    const memory = createMemoryPersistence({
+      initial: {
+        notes: {
+          revision: 'r1',
+          sequence: 1,
+          update: incompleteUpdate(),
+        },
+      },
+    });
+    const { open, logger } = serve({
+      persistence: memory,
+      seeds: { seed: () => Promise.resolve(stateOf('seeded')) },
+    });
+    const member = open();
+    await settle();
+
+    expect(member.doc.get('text').toString()).toBe('seeded');
+    expect(logger.warn).toHaveBeenCalledWith(
+      'The stored room cannot be read; it starts from its seed.',
+      expect.anything(),
+    );
+    expect(memory.peek('notes')?.sequence).toBe(2);
+  });
+
+  it('COLLAB-SERVER-8.2 refuses an incomplete seed instead of persisting deferred content', async () => {
+    const { open, sockets, server } = serve({
+      seeds: { seed: () => Promise.resolve(incompleteUpdate()) },
+    });
+    open();
+    await settle();
+
+    expect(sockets.sockets[0]?.serverClose?.code).toBe(CLOSE_CODES.unavailable);
+    expect(server.roomCount()).toBe(0);
+  });
+
+  it('COLLAB-CLIENT-5.3 answers false for receipt requests made after refusal, until it connects again', async () => {
+    let allowed = false;
+    const { open } = serve({
+      auth: {
+        admit: () =>
+          Promise.resolve(
+            allowed
+              ? { ok: true, actor: { id: 'u' }, access: 'read-write' }
+              : { ok: false, reason: 'forbidden' },
+          ),
+      },
+    });
+    const member = open();
+    await settle();
+    let result: boolean | null = null;
+    void member.whenStored().then((stored) => {
+      result = stored;
+    });
+    await settle();
+    allowed = true;
+    member.connect();
+    const afterConnect = member.whenStored();
+
+    expect(result).toBe(false);
+    await expect(afterConnect).resolves.toBe(true);
   });
 });

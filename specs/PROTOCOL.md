@@ -43,14 +43,14 @@ Verification: `src/protocol/messages.test.ts`
 
 ### COLLAB-PROTOCOL-2.1 - Building a room URL
 
-`buildRoomUrl({ endpoint, room, token, params })` shall append the room to the endpoint's path as one `encodeURIComponent` segment, dropping trailing slashes from the path, keep the endpoint's own query, add each of `params` except `token` and `generation`, then the generation as the `generation` parameter (`GENERATION_PARAM`) and the token as the `token` parameter, each when there is one.
+`buildRoomUrl({ endpoint, room, token, params })` shall append the room to the endpoint's path as one `encodeURIComponent` segment, dropping trailing slashes from the path, keep the endpoint's own query except its reserved `token` and `generation` parameters, add each of `params` except `token` and `generation`, then the generation as the `generation` parameter (`GENERATION_PARAM`) and the token as the `token` parameter, each when there is one.
 
 Implementation: `src/protocol/room-url.ts`
 Verification: `src/protocol/room-url.test.ts`
 
 ### COLLAB-PROTOCOL-2.2 - Reading a room URL
 
-`parseRoomUrl(path)` shall return the room decoded from the last path segment, the `token` parameter or `null`, the `generation` parameter or `null` when it is missing or empty, and every other parameter. It shall return `null` when the segment is empty or cannot be decoded.
+`parseRoomUrl(path)` shall return the room decoded from the last path segment, the `token` parameter or `null`, the `generation` parameter or `null` when it is missing or empty, and every other parameter as an own data property, including prototype-named keys. It shall return `null` when the URL is invalid or the segment is empty or cannot be decoded.
 
 Implementation: `src/protocol/room-url.ts`
 Verification: `src/protocol/room-url.test.ts`

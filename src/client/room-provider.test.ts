@@ -351,3 +351,51 @@ function lastSocket(server: LoopbackServer) {
   if (!socket) throw new Error('no socket');
   return socket;
 }
+
+describe('connection recovery boundaries', () => {
+  it('COLLAB-CLIENT-2.2 replaces a socket that never opens', async () => {
+    const server = createLoopbackServer({ manualOpen: true });
+    const clock = createManualClock();
+    const provider = open(server, { clock, socketTimeoutMs: 10_000 });
+
+    clock.advance(12_000);
+    await flush();
+    clock.advance(200);
+    await flush();
+
+    expect(server.urls).toHaveLength(2);
+    expect(provider.getState().status).toBe('connecting');
+  });
+
+  it('COLLAB-CLIENT-2.1 retries a socket factory that throws', async () => {
+    const server = createLoopbackServer();
+    const clock = createManualClock();
+    const logger = { error: vi.fn() };
+    const createSocket = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error('socket failed');
+      })
+      .mockImplementation(server.createSocket);
+    const provider = open(server, { clock, logger, createSocket });
+    expect(provider.getState().status).toBe('disconnected');
+    clock.advance(200);
+    await flush();
+
+    expect(provider.getState().status).toBe('connected');
+    expect(logger.error).toHaveBeenCalled();
+  });
+});
+
+it('COLLAB-CLIENT-2.1 clears a scheduled retry when explicitly reconnecting', async () => {
+  const server = createLoopbackServer({ manualOpen: true });
+  const clock = createManualClock();
+  const provider = open(server, { clock });
+  lastSocket(server).drop();
+  await flush();
+
+  provider.connect();
+  provider.disconnect();
+
+  expect(clock.pendingDelays()).toEqual([]);
+});
