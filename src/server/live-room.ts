@@ -2,7 +2,7 @@ import { Awareness, encodeAwarenessUpdate, removeAwarenessStates } from '@y/prot
 import { applyUpdate, Doc, encodeStateAsUpdate } from '@y/y';
 import { encodeAwarenessFrame, encodeSyncUpdate } from '../protocol/frames.js';
 import { type AwarenessOwners, createAwarenessOwners } from './awareness-owners.js';
-import type { RoomLoadResult, RoomStoreResult } from './host/adapters.js';
+import type { RoomLoadResult, RoomStoreResult, RoomWriteRules } from './host/adapters.js';
 import type { ResolvedRoomHost } from './host/host.js';
 import { createStoreScheduler, type StoreOutcome, type StoreScheduler } from './store-scheduler.js';
 
@@ -28,6 +28,8 @@ export interface LiveRoom {
   readonly members: Set<RoomMember>;
   readonly owners: AwarenessOwners<RoomMember>;
   readonly store: StoreScheduler;
+  /** The host's write rules for the room, read when it loaded. */
+  readonly rules: RoomWriteRules | null;
   /** Sends `frame` to every member except `except`. */
   broadcast(frame: Uint8Array<ArrayBuffer>, except?: RoomMember): void;
   /** Removes a member and its awareness states. */
@@ -157,6 +159,7 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
     members: new Set(),
     owners: createAwarenessOwners(),
     store,
+    rules: host.permissions.rulesFor(name),
     broadcast: (frame, except) => room.members.forEach((m) => m !== except && m.send(frame)),
     leave: (member) => removeMember(room, member),
     destroy: () => {

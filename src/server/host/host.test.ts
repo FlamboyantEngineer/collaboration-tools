@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { PLATFORM_CLOCK } from '../../protocol/clock.js';
 import type { RoomAdmission, RoomAuth, RoomHost, RoomPersistence } from './adapters.js';
-import { resolveRoomHost, SILENT_LOGGER } from './host.js';
+import { NO_PERMISSIONS, resolveRoomHost, SILENT_LOGGER } from './host.js';
 import { createMemoryPersistence } from './memory-persistence.js';
 
 const auth: RoomAuth = {
@@ -17,6 +17,8 @@ describe('resolveRoomHost', () => {
           actor: { id: string; name?: string | undefined };
           access: 'read-write' | 'read-only';
           room?: string | undefined;
+          capabilities?: readonly string[] | undefined;
+          expiresAt?: number | undefined;
         }
       | { ok: false; reason: 'unauthenticated' | 'forbidden' | 'not-found' }
     >();
@@ -27,7 +29,14 @@ describe('resolveRoomHost', () => {
 
     const host = resolveRoomHost({ auth, persistence });
 
-    expect(host).toEqual({ auth, persistence, logger: SILENT_LOGGER, clock: PLATFORM_CLOCK });
+    expect(host).toEqual({
+      auth,
+      persistence,
+      permissions: NO_PERMISSIONS,
+      logger: SILENT_LOGGER,
+      clock: PLATFORM_CLOCK,
+    });
+    expect(host.permissions.rulesFor('room-a')).toBeNull();
     expect(() => host.logger.error('ignored', { room: 'room-a' })).not.toThrow();
   });
 

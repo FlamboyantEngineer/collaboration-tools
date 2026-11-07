@@ -18,14 +18,21 @@ import {
   type RoomAccess,
 } from '../protocol/messages.js';
 import { decodeAwarenessEntries, encodeAwarenessEntries } from './awareness-owners.js';
+import type { RoomActor } from './host/adapters.js';
 import type { LiveRoom, RoomMember } from './live-room.js';
+import { checkWrite } from './write-rules.js';
 
 /** What reading a member's frames needs. */
 export interface MemberContext {
   room: LiveRoom;
   member: RoomMember;
+  actor: RoomActor;
+  /** The access and capabilities a refreshed decision may change. */
   access: RoomAccess;
+  capabilities: ReadonlySet<string>;
   onStateless(payload: string): void;
+  /** Called when the room's rules refuse an update, which is then dropped. */
+  onRefusedWrite(types: readonly string[]): void;
 }
 
 function isEmptyIds(ids: ContentIds): boolean {
@@ -33,11 +40,25 @@ function isEmptyIds(ids: ContentIds): boolean {
 }
 
 /**
- * Applies a member's update. The room echoes what it changes to every member; what it held
+ * Applies a member's update once the room's rules allow it. The room echoes what it changes to every member; what it held
  * already, such as an update a client resends after losing the echo, is acknowledged to the
  * sender alone, so the sender learns the room holds it.
  */
-function applyMemberUpdate({ room, member }: MemberContext, update: Uint8Array) {
+function applyMemberUpdate(context: MemberContext, update: Uint8Array) {
+  const { room, member } = context;
+  if (room.rules) {
+    const decision = checkWrite(room.rules, {
+      room: room.name,
+      doc: room.doc,
+      actor: context.actor,
+      capabilities: context.capabilities,
+      update,
+    });
+    // An incomplete update is dropped, never held back unchecked: the sync step 1 asks the client
+    // for everything the room lacks, its dependencies included.
+    if (decision.verdict === 'incomplete') return member.send(encodeSyncStep1(room.doc));
+    if (decision.verdict === 'refused') return context.onRefusedWrite(decision.types);
+  }
   let applied: Uint8Array | null = null;
   const watch = (change: Uint8Array) => (applied = change);
   room.doc.on('update', watch);

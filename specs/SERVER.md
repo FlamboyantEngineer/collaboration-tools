@@ -153,3 +153,33 @@ A text frame shall close the socket with `CLOSE_CODES.badRequest`, and a frame l
 
 Implementation: `src/server/websocket-attachment.ts`
 Verification: `src/server/websocket-attachment.test.ts`
+
+## COLLAB-SERVER-7 - Authorization
+
+### COLLAB-SERVER-7.1 - Reading an update's changes
+
+Before applying a read-write connection's update to a room with write rules, the server shall read, without applying the update or copying the room, every top-level type the update changes and the keys directly under that type whose content it changes, a position in a list or text counting as `null`. A change deep inside a nested type counts under the top-level key that holds it. Content the room holds already and content Yjs would drop count as no change.
+
+Implementation: `src/server/update-changes.ts`
+Verification: `src/server/update-changes.test.ts`
+
+### COLLAB-SERVER-7.2 - Write rules
+
+`host.permissions.rulesFor(room)` shall give a room its `RoomWriteRules` when it loads. A changed top-level type in `serverOnly` shall refuse the update; otherwise the type shall need the capability `required` names for it, or `otherwise` when it is not named, or nothing beyond read-write access. When the lists allow the change, the rules' `check(change)` shall decide, with the room, actor, capabilities and changes; `change.simulate(inspect)` shall run `inspect` on a copy of the room with a function that applies the update to it. A `check` that throws shall refuse. A refused update shall not be applied: the server shall log it, send an auth denied message with `unauthorized-write` and close the socket with `CLOSE_CODES.forbidden`. The host's room handles are not checked.
+
+Implementation: `src/server/write-rules.ts`, `src/server/member-frames.ts`, `src/server/server-connection.ts`, `src/server/live-room.ts`, `src/server/host/adapters.ts`, `src/server/host/host.ts`
+Verification: `src/server/authorization.test.ts`, `src/server/host/host.test.ts`
+
+### COLLAB-SERVER-7.3 - Incomplete updates
+
+In a room with write rules, an update that builds on content the room lacks shall not be applied or held back, since it would later apply unchecked; the server shall answer it with a sync step 1, so the client sends everything the room lacks.
+
+Implementation: `src/server/update-changes.ts`, `src/server/member-frames.ts`
+Verification: `src/server/update-changes.test.ts`, `src/server/authorization.test.ts`
+
+### COLLAB-SERVER-7.4 - Expiry and refresh
+
+When admission gives an `expiresAt`, the server shall call `host.auth.refresh` with the admission request, the canonical room and the actor 30 seconds before then. A refused decision shall send an auth denied message and close the socket with the refusal's close code. An admitted one shall replace the connection's capabilities, send an auth granted message when the access changed, and, with a new `expiresAt`, schedule the next refresh. A refresh that throws shall be logged and retried every 5 seconds. When the decision expires with no fresh one, or the auth adapter has no `refresh`, the server shall close the socket with `CLOSE_CODES.unauthenticated` and reason `expired`, without an auth message, so the client reconnects with a fresh token.
+
+Implementation: `src/server/reauthorization.ts`, `src/server/server-connection.ts`
+Verification: `src/server/authorization.test.ts`
