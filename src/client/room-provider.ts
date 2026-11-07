@@ -2,9 +2,12 @@ import { Awareness } from '@y/protocols/awareness';
 import type { Doc } from '@y/y';
 import { PLATFORM_CLOCK, type RoomClock } from '../protocol/clock.js';
 import { encodeStatelessMessage } from '../protocol/messages.js';
+import { readRoomGeneration } from '../protocol/room-meta.js';
 import { buildRoomUrl } from '../protocol/room-url.js';
 import {
   createConnectionStateStore,
+  createErrorReporter,
+  type RoomClientLogger,
   type RoomConnectionListener,
   type RoomConnectionState,
 } from './connection-state.js';
@@ -12,6 +15,7 @@ import { encodeAwarenessState } from './frames.js';
 import {
   cancelReconnect,
   openSession,
+  requestReceipt,
   type RoomConnection,
   sendLocalUpdate,
 } from './room-connection.js';
@@ -20,6 +24,7 @@ import {
   PLATFORM_SOCKET_FACTORY,
   type RoomSocketFactory,
 } from './room-socket.js';
+import { createStoreReceipts } from './store-receipts.js';
 import { createUnconfirmedUpdates } from './unconfirmed-updates.js';
 
 export interface RoomProviderOptions {
@@ -45,6 +50,11 @@ export interface RoomProviderOptions {
   maxBackoffMs?: number | undefined;
   /** A socket silent for longer than this closes and reconnects. Defaults to 45000 ms. */
   socketTimeoutMs?: number | undefined;
+  /**
+   * Receives the errors the provider catches, such as a listener that throws. Without one, each
+   * error is rethrown in a microtask, as the platform reports an event listener's.
+   */
+  logger?: RoomClientLogger | undefined;
 }
 
 /** A shared document kept in sync with a room on a server. */
@@ -57,6 +67,12 @@ export interface RoomProvider {
   onStateless(listener: (payload: string) => void): () => void;
   /** Sends a stateless message to the room; returns `false` when no socket is open. */
   sendStateless(payload: string): boolean;
+  /**
+   * Resolves `true` once the room has stored every local change made so far, waiting through
+   * reconnects, or `false` when the provider is refused or destroyed first. A read-only
+   * connection's changes never reach the room, so for it the receipt covers only the room's own.
+   */
+  whenStored(): Promise<boolean>;
   /** Whether a transaction with this origin came from the server. */
   isRemoteOrigin(origin: unknown): boolean;
   connect(): void;
@@ -68,12 +84,14 @@ const DEFAULT_MAX_BACKOFF_MS = 2_500;
 const DEFAULT_SOCKET_TIMEOUT_MS = 45_000;
 
 function createConnection(options: RoomProviderOptions): RoomConnection {
+  const report = createErrorReporter(options.logger);
   return {
     url: () =>
       buildRoomUrl({
         endpoint: options.endpoint,
         room: options.room,
         token: options.getToken?.() ?? null,
+        generation: readRoomGeneration(options.doc),
         params: options.params,
       }),
     doc: options.doc,
@@ -83,8 +101,10 @@ function createConnection(options: RoomProviderOptions): RoomConnection {
     createSocket: options.createSocket ?? PLATFORM_SOCKET_FACTORY,
     maxBackoffMs: options.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS,
     socketTimeoutMs: options.socketTimeoutMs ?? DEFAULT_SOCKET_TIMEOUT_MS,
-    store: createConnectionStateStore(),
+    report,
+    store: createConnectionStateStore(report),
     unconfirmed: createUnconfirmedUpdates(),
+    receipts: createStoreReceipts(),
     statelessListeners: new Set(),
     session: null,
     shouldConnect: options.connect !== false,
@@ -154,6 +174,7 @@ export function createRoomProvider(options: RoomProviderOptions): RoomProvider {
     if (connection.destroyed) return;
     disconnect();
     connection.destroyed = true;
+    connection.receipts.end();
     stopListening();
     if (!options.awareness) awareness.destroy();
     connection.statelessListeners.clear();
@@ -173,6 +194,7 @@ export function createRoomProvider(options: RoomProviderOptions): RoomProvider {
       };
     },
     sendStateless: (payload) => connection.session?.send(encodeStatelessMessage(payload)) ?? false,
+    whenStored: () => (connection.destroyed ? Promise.resolve(false) : requestReceipt(connection)),
     isRemoteOrigin: (candidate) => candidate === connection.origin,
     connect,
     disconnect,

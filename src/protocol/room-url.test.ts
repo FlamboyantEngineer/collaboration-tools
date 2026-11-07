@@ -19,19 +19,22 @@ describe('room URLs', () => {
     );
   });
 
-  it('COLLAB-PROTOCOL-2.2 reads back the room, token and parameters', () => {
+  it('COLLAB-PROTOCOL-2.2 reads back the room, token, generation and parameters', () => {
     const url = new URL(
       buildRoomUrl({
         endpoint: 'wss://host.test/live',
         room: 'a/b',
         token: 't',
-        params: { mode: 'edit' },
+        generation: 'g1',
+        params: { mode: 'edit', generation: 'ignored' },
       }),
     );
 
+    expect(url.search).toBe('?mode=edit&generation=g1&token=t');
     expect(parseRoomUrl(url.pathname + url.search)).toEqual({
       room: 'a/b',
       token: 't',
+      generation: 'g1',
       params: { mode: 'edit' },
     });
   });
@@ -39,6 +42,11 @@ describe('room URLs', () => {
   it('COLLAB-PROTOCOL-2.2 finds no room in an empty or malformed segment', () => {
     expect(parseRoomUrl('/live/')).toBeNull();
     expect(parseRoomUrl('/live/%E0%A4%A')).toBeNull();
-    expect(parseRoomUrl('/live/r')).toEqual({ room: 'r', token: null, params: {} });
+    expect(parseRoomUrl('/live/r')).toEqual({
+      room: 'r',
+      token: null,
+      generation: null,
+      params: {},
+    });
   });
 });

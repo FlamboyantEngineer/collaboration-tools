@@ -6,10 +6,14 @@ import {
   type AuthMessage,
   encodeAuthMessage,
   encodeStatelessMessage,
+  encodeStorageMessage,
   isRoomAccess,
   MESSAGE_TYPES,
   readAuthMessage,
   readStatelessMessage,
+  readStorageMessage,
+  STORAGE_SUBTYPES,
+  type StorageMessage,
 } from './messages.js';
 
 function decoderAfterType(frame: Uint8Array, type: number) {
@@ -26,6 +30,7 @@ describe('protocol messages', () => {
       auth: 2,
       queryAwareness: 3,
       stateless: 5,
+      storage: 6,
     });
   });
 
@@ -69,5 +74,28 @@ describe('protocol messages', () => {
     expect(readStatelessMessage(decoderAfterType(frame, MESSAGE_TYPES.stateless))).toBe(
       '{"saved":true}',
     );
+  });
+
+  it.each<StorageMessage>([
+    { type: 'status', status: 'saved' },
+    { type: 'status', status: 'retrying' },
+    { type: 'receipt-request', id: 7 },
+    { type: 'receipt', id: 7 },
+  ])('COLLAB-PROTOCOL-1.5 round-trips the storage message %o', (message) => {
+    const frame = encodeStorageMessage(message);
+
+    expect(readStorageMessage(decoderAfterType(frame, MESSAGE_TYPES.storage))).toEqual(message);
+  });
+
+  it('COLLAB-PROTOCOL-1.5 ignores a storage subtype or status it does not know', () => {
+    const frame = (subtype: number, value: number) => {
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, subtype);
+      encoding.writeVarUint(encoder, value);
+      return decoding.createDecoder(encoding.toUint8Array(encoder));
+    };
+
+    expect(readStorageMessage(frame(9, 0))).toBeNull();
+    expect(readStorageMessage(frame(STORAGE_SUBTYPES.status, 9))).toBeNull();
   });
 });

@@ -37,6 +37,7 @@ describe('frame encoders', () => {
       forbidden: 4403,
       notFound: 4404,
       conflict: 4409,
+      gone: 4410,
     });
   });
 });

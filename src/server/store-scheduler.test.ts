@@ -76,4 +76,40 @@ describe('createStoreScheduler', () => {
     expect(cancelled).toBe(true);
     expect(clock.pendingDelays()).toEqual([]);
   });
+
+  it('COLLAB-SERVER-4.2 holds new changes for a failed store’s retry instead of debouncing them', async () => {
+    const { clock, stores, store } = scheduler(['retry', 'stored']);
+    const start = clock.now();
+
+    store.markDirty();
+    clock.advance(100);
+    await settle();
+    clock.advance(10);
+    store.markDirty();
+    clock.advance(40);
+    await settle();
+
+    expect(stores.map((at) => at - start)).toEqual([100, 150]);
+    expect(store.isDirty()).toBe(false);
+  });
+
+  it('COLLAB-SERVER-8.3 COLLAB-SERVER-8.4 reports its status and resolves waiters once their changes are stored', async () => {
+    const { clock, store } = scheduler(['stored', 'abandoned']);
+    const clean = await store.whenStored();
+    store.markDirty();
+    const first = store.whenStored();
+    const status = store.status();
+    clock.advance(100);
+    await settle();
+
+    store.markDirty();
+    const second = store.whenStored();
+    clock.advance(100);
+    await settle();
+
+    expect([clean, status]).toEqual([true, 'unsaved']);
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(false);
+    await expect(store.whenStored()).resolves.toBe(false);
+  });
 });

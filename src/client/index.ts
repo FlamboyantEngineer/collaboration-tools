@@ -1,4 +1,5 @@
 export {
+  type RoomClientLogger,
   type RoomConnectionAccess,
   type RoomConnectionListener,
   type RoomConnectionState,

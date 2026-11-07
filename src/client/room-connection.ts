@@ -1,9 +1,10 @@
 import { removeAwarenessStates } from '@y/protocols/awareness';
 import type { RoomTimer } from '../protocol/clock.js';
 import { encodeSyncUpdate } from '../protocol/frames.js';
-import type { AuthMessage } from '../protocol/messages.js';
-import { type ConnectionStateStore, reportListenerError } from './connection-state.js';
+import type { AuthMessage, StorageMessage } from '../protocol/messages.js';
+import type { ConnectionStateStore } from './connection-state.js';
 import { openSocketSession, type SocketConfig, type SocketSession } from './socket-session.js';
+import type { StoreReceipts } from './store-receipts.js';
 import type { UnconfirmedUpdates } from './unconfirmed-updates.js';
 
 /** Everything a provider's connection reads and changes, shared by its handlers. */
@@ -13,6 +14,7 @@ export interface RoomConnection extends SocketConfig {
   readonly maxBackoffMs: number;
   readonly store: ConnectionStateStore;
   readonly unconfirmed: UnconfirmedUpdates;
+  readonly receipts: StoreReceipts;
   readonly statelessListeners: Set<(payload: string) => void>;
   session: SocketSession | null;
   shouldConnect: boolean;
@@ -26,9 +28,21 @@ function markUnconfirmed(connection: RoomConnection) {
   connection.store.update({ hasUnconfirmedChanges: !connection.unconfirmed.isEmpty() });
 }
 
+/** Sends what a lost socket took with it, then the receipt requests that follow it. */
 function resendMissing(connection: RoomConnection) {
+  const { session } = connection;
+  if (!session) return;
   const missing = connection.unconfirmed.encodeMissing(connection.doc);
-  if (missing) connection.session?.send(encodeSyncUpdate(missing));
+  if (missing) session.send(encodeSyncUpdate(missing));
+  connection.receipts.sendPending(session.send);
+}
+
+/** Asks the server to say once it has stored every local change made so far. */
+export function requestReceipt(connection: RoomConnection): Promise<boolean> {
+  const receipt = connection.receipts.request();
+  const { session } = connection;
+  if (session && connection.store.get().synced) connection.receipts.sendPending(session.send);
+  return receipt;
 }
 
 function handleRemoteUpdate(connection: RoomConnection, update: Uint8Array, isSyncStep2: boolean) {
@@ -48,8 +62,14 @@ function handleAuth(connection: RoomConnection, message: AuthMessage) {
     return;
   }
   connection.shouldConnect = false;
+  connection.receipts.end();
   connection.store.update({ refusal: message.reason });
   connection.session?.close();
+}
+
+function handleStorage(connection: RoomConnection, message: StorageMessage) {
+  if (message.type === 'status') connection.store.update({ saveStatus: message.status });
+  else if (message.type === 'receipt') connection.receipts.received(message.id);
 }
 
 function notifyStateless(connection: RoomConnection, payload: string) {
@@ -57,7 +77,7 @@ function notifyStateless(connection: RoomConnection, payload: string) {
     try {
       listener(payload);
     } catch (error) {
-      reportListenerError(error);
+      connection.report('A stateless listener threw.', error);
     }
   }
 }
@@ -68,7 +88,14 @@ function handleClose(connection: RoomConnection, code: number | null) {
   connection.session = null;
   const remote = [...awareness.getStates().keys()].filter((id) => id !== awareness.clientID);
   removeAwarenessStates(awareness, remote, connection.origin);
-  store.update({ status: 'disconnected', access: 'pending', synced: false, closeCode: code });
+  connection.receipts.resend();
+  store.update({
+    status: 'disconnected',
+    access: 'pending',
+    synced: false,
+    closeCode: code,
+    saveStatus: null,
+  });
   connection.failedAttempts = opened ? 0 : connection.failedAttempts + 1;
   scheduleReconnect(connection);
 }
@@ -87,6 +114,7 @@ export function openSession(connection: RoomConnection): void {
     onRemoteUpdate: (update, isSyncStep2) => handleRemoteUpdate(connection, update, isSyncStep2),
     onAuth: (message) => handleAuth(connection, message),
     onStateless: (payload) => notifyStateless(connection, payload),
+    onStorage: (message) => handleStorage(connection, message),
     onClose: (code) => handleClose(connection, code),
   });
 }

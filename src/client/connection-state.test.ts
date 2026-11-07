@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createConnectionStateStore } from './connection-state.js';
+import { createConnectionStateStore, createErrorReporter } from './connection-state.js';
 
 describe('createConnectionStateStore', () => {
   it('COLLAB-CLIENT-1.5 notifies only when a field changes', () => {
@@ -30,5 +30,18 @@ describe('createConnectionStateStore', () => {
     expect(after).toHaveBeenCalledOnce();
     expect(queued).toHaveLength(1);
     expect(() => queued[0]?.()).toThrow(error);
+  });
+
+  it('COLLAB-CLIENT-5.4 passes a listener’s error to the provider’s logger when it has one', () => {
+    const logger = { error: vi.fn() };
+    const store = createConnectionStateStore(createErrorReporter(logger));
+    const error = new Error('listener failed');
+    store.subscribe(() => {
+      throw error;
+    });
+
+    store.update({ status: 'connecting' });
+
+    expect(logger.error).toHaveBeenCalledWith('A connection state listener threw.', { error });
   });
 });
