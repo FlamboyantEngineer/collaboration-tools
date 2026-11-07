@@ -1,0 +1,77 @@
+{
+  "name": "@flamboyantengineer/collaboration-tools",
+  "version": "0.0.0",
+  "description": "Real-time Yjs collaboration: a room server, a client provider and the wire protocol between them, connected to a host through adapters.",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FlamboyantEngineer/collaboration-tools.git"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "sideEffects": false,
+  "exports": {
+    "./protocol": {
+      "types": "./dist/protocol/index.d.ts",
+      "import": "./dist/protocol/index.js",
+      "default": "./dist/protocol/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js",
+      "default": "./dist/client/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js",
+      "default": "./dist/server/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "src",
+    "!src/**/*.test.*",
+    "specs",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "node scripts/clean.mjs dist && tsc -p tsconfig.build.json",
+    "build:package": "npm run build",
+    "prepare": "node scripts/prepare.mjs",
+    "lint": "node --max-old-space-size=6144 node_modules/eslint/bin/eslint.js . --max-warnings=0",
+    "format": "prettier --write --cache --cache-strategy content .",
+    "format:check": "prettier --check --cache --cache-strategy content .",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.scripts.json",
+    "test": "vitest run",
+    "test:changed": "vitest run --changed origin/dev --passWithNoTests",
+    "test:watch": "vitest",
+    "check:references": "node scripts/check-references.mjs",
+    "check:specs": "node scripts/check-specs.mjs",
+    "check": "node scripts/check.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.5",
+    "@y/y": "14.0.0-rc.23",
+    "eslint": "^10.14.0",
+    "eslint-plugin-simple-import-sort": "^12.1.1",
+    "globals": "^17.14.0",
+    "prettier": "^3.9.10",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.1.0"
+  },
+  "dependencies": {
+    "@y/protocols": "1.0.6-rc.1",
+    "@y/websocket": "4.0.0-rc.2",
+    "lib0": "1.0.0-rc.22"
+  },
+  "peerDependencies": {
+    "@y/y": "14.0.0-rc.23"
+  }
+}
