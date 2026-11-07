@@ -68,7 +68,7 @@
     "@types/ws": "^8.18.2",
     "@y/y": "14.0.0-rc.23",
     "eslint": "^10.14.0",
-    "eslint-plugin-simple-import-sort": "^12.1.1",
+    "eslint-plugin-simple-import-sort": "^14.0.0",
     "globals": "^17.14.0",
     "prettier": "^3.9.10",
     "typescript": "^6.0.3",

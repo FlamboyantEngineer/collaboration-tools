@@ -10,6 +10,18 @@ updates:
     groups:
       npm:
         patterns: ['*']
+    ignore:
+      # The Yjs v14 prereleases are pinned exactly and move together by hand. Their registry
+      # holds older builds such as 14.0.0-22 that Dependabot ranks above the rc line.
+      - dependency-name: '@y/y'
+      - dependency-name: '@y/protocols'
+      - dependency-name: lib0
+      # The types follow the Node major in .nvmrc.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+      # A TypeScript major waits until typescript-eslint supports it.
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
   - package-ecosystem: github-actions
     directory: /
     target-branch: dev
