@@ -126,7 +126,7 @@ Verification: `src/server/durability.test.ts`
 
 ### COLLAB-CLIENT-5.3 - Waiting until stored
 
-`whenStored()` shall resolve `true` once the room has stored every local change made before the call. It shall send its receipt request once the current socket has synced and sent what an earlier socket lost, sending it again on the next socket when one closes first, and resolve `false` when the provider is refused or destroyed first, including calls made after refusal. A read-only connection's changes never reach the room, so its receipt covers only the room's own changes.
+`whenStored()` shall resolve `true` once the room has stored every local change made before the call. It shall send its receipt request once the current socket has synced and sent what an earlier socket lost, sending it again on the next socket when one closes first, and resolve `false` when the provider is refused or destroyed first, including calls made after a refusal and before the next `connect()`. A read-only connection's changes never reach the room, so its receipt covers only the room's own changes.
 
 Implementation: `src/client/store-receipts.ts`, `src/client/room-connection.ts`, `src/client/room-provider.ts`
 Verification: `src/server/durability.test.ts`

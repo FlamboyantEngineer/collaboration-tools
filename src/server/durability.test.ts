@@ -349,9 +349,17 @@ describe('incomplete stored updates', () => {
     expect(server.roomCount()).toBe(0);
   });
 
-  it('COLLAB-CLIENT-5.3 answers false for receipt requests made after refusal', async () => {
+  it('COLLAB-CLIENT-5.3 answers false for receipt requests made after refusal, until it connects again', async () => {
+    let allowed = false;
     const { open } = serve({
-      auth: { admit: () => Promise.resolve({ ok: false, reason: 'forbidden' }) },
+      auth: {
+        admit: () =>
+          Promise.resolve(
+            allowed
+              ? { ok: true, actor: { id: 'u' }, access: 'read-write' }
+              : { ok: false, reason: 'forbidden' },
+          ),
+      },
     });
     const member = open();
     await settle();
@@ -360,6 +368,11 @@ describe('incomplete stored updates', () => {
       result = stored;
     });
     await settle();
+    allowed = true;
+    member.connect();
+    const afterConnect = member.whenStored();
+
     expect(result).toBe(false);
+    await expect(afterConnect).resolves.toBe(true);
   });
 });

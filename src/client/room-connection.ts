@@ -39,7 +39,10 @@ function resendMissing(connection: RoomConnection) {
 
 /** Asks the server to say once it has stored every local change made so far. */
 export function requestReceipt(connection: RoomConnection): Promise<boolean> {
-  if (connection.store.get().refusal !== null) return Promise.resolve(false);
+  // A refused provider stays stopped until `connect()`, which may reconnect with a fresh token.
+  if (connection.store.get().refusal !== null && !connection.shouldConnect) {
+    return Promise.resolve(false);
+  }
   const receipt = connection.receipts.request();
   const { session } = connection;
   if (session && connection.store.get().synced) connection.receipts.sendPending(session.send);
