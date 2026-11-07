@@ -1,6 +1,8 @@
-// A handler property checked like a method, so the platform's handlers, which take a fuller event,
-// satisfy it.
-type SocketHandler<Event> = { handle(event: Event): void }['handle'];
+/**
+ * A socket event handler, checked like a method so the platform's handlers, which take a fuller
+ * event, satisfy it.
+ */
+export type SocketHandler<Event> = { handle(event: Event): void }['handle'];
 
 /** The part of a WebSocket the provider uses; the platform `WebSocket` satisfies it. */
 export interface RoomSocket {
