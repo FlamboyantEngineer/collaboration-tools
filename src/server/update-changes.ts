@@ -133,7 +133,14 @@ export function analyzeUpdate(doc: Doc, update: Uint8Array): UpdateAnalysis {
   for (const [client, items] of read.incoming) {
     const held = nextClock(doc, client);
     // Content the document holds already changes nothing.
-    for (const item of items) if (item.id.clock + item.length > held) record(reader.place(item));
+    for (const item of items) {
+      if (item.id.clock + item.length <= held) continue;
+      // Yjs requires both neighbours even though either one suffices to locate the change.
+      if (item.origin) reader.find(item.origin);
+      if (item.rightOrigin) reader.find(item.rightOrigin);
+      if (item.parent instanceof ID) reader.find(item.parent);
+      record(reader.place(item));
+    }
   }
   let complete = true;
   ds.clients.forEach((ranges, client) => {

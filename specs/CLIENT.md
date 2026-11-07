@@ -43,14 +43,14 @@ Verification: `src/client/room-provider.test.ts`, `src/client/connection-state.t
 
 ### COLLAB-CLIENT-2.1 - Reconnecting
 
-While it should be connected, the provider shall open a new socket when one closes: at once after a socket that had opened, and after `2^n × 100` ms, capped at `maxBackoffMs` (default 2500), after the `n`-th attempt in a row that never opened. `disconnect()` shall close the socket and stop reconnecting, after telling the room the local awareness state is gone; `connect()` shall start again.
+While it should be connected, the provider shall open a new socket when one closes: at once after a socket that had opened, and after `2^n × 100` ms, capped at `maxBackoffMs` (default 2500), after the `n`-th attempt in a row that never opened. `disconnect()` shall close the socket and stop reconnecting, after telling the room the local awareness state is gone; `connect()` shall start again. If the token getter or socket factory throws during an attempt, the provider shall report the error and retry with the same backoff.
 
 Implementation: `src/client/room-connection.ts`, `src/client/room-provider.ts`
 Verification: `src/client/room-provider.test.ts`
 
 ### COLLAB-CLIENT-2.2 - Stale sockets
 
-A socket that receives nothing for longer than `socketTimeoutMs` (default 45000) shall be closed and replaced. The check shall run every 4 seconds on the provider's clock. A pass that runs more than two cadences after the previous one shall measure silence from itself, so messages queued behind a long task get a full timeout; a late pass that follows another late pass shall keep the earlier start, so steady throttling still closes a dead socket.
+A socket that never opens, or receives nothing for longer than `socketTimeoutMs` (default 45000) shall be closed and replaced. The check shall run every 4 seconds on the provider's clock. A pass that runs more than two cadences after the previous one shall measure silence from itself, so messages queued behind a long task get a full timeout; a late pass that follows another late pass shall keep the earlier start, so steady throttling still closes a dead socket.
 
 Implementation: `src/client/stale-socket-check.ts`, `src/client/socket-session.ts`
 Verification: `src/client/stale-socket-check.test.ts`, `src/client/room-provider.test.ts`
@@ -126,7 +126,7 @@ Verification: `src/server/durability.test.ts`
 
 ### COLLAB-CLIENT-5.3 - Waiting until stored
 
-`whenStored()` shall resolve `true` once the room has stored every local change made before the call. It shall send its receipt request once the current socket has synced and sent what an earlier socket lost, sending it again on the next socket when one closes first, and resolve `false` when the provider is refused or destroyed first. A read-only connection's changes never reach the room, so its receipt covers only the room's own changes.
+`whenStored()` shall resolve `true` once the room has stored every local change made before the call. It shall send its receipt request once the current socket has synced and sent what an earlier socket lost, sending it again on the next socket when one closes first, and resolve `false` when the provider is refused or destroyed first, including calls made after refusal. A read-only connection's changes never reach the room, so its receipt covers only the room's own changes.
 
 Implementation: `src/client/store-receipts.ts`, `src/client/room-connection.ts`, `src/client/room-provider.ts`
 Verification: `src/server/durability.test.ts`

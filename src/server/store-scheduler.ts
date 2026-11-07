@@ -104,11 +104,11 @@ export function createStoreScheduler(options: StoreSchedulerOptions): StoreSched
     const covered = version;
     firstDirtyAt = null;
     const outcome = await options.store();
-    retrying = outcome === 'retry';
-    if (outcome === 'stored') {
+    retrying = !ended && outcome === 'retry';
+    if (!ended && outcome === 'stored') {
       storedVersion = Math.max(storedVersion, covered);
       retryDelay = options.retryInitialMs;
-    } else if (outcome === 'retry') {
+    } else if (!ended && outcome === 'retry') {
       schedule(retryDelay);
       retryDelay = Math.min(retryDelay * 2, options.retryMaxMs);
     } else ended = true;

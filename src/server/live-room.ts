@@ -6,7 +6,13 @@ import { type AwarenessOwners, createAwarenessOwners } from './awareness-owners.
 import type { RoomWriteRules } from './host/adapters.js';
 import type { ResolvedRoomHost } from './host/host.js';
 import { createStoreScheduler, type StoreScheduler } from './store-scheduler.js';
-import { openStoredDoc, recordMetric, type RoomStoreContext, storeRoom } from './stored-room.js';
+import {
+  openStoredDoc,
+  recordMetric,
+  type RoomStoreContext,
+  storeRoom,
+  toError,
+} from './stored-room.js';
 
 /** What a room needs from each connection in it. */
 export interface RoomMember {
@@ -69,6 +75,13 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
   const load = await openStoredDoc(name, host);
   if (!load.ok) return load;
   const { doc, baseRevision, newGeneration } = load.opened;
+  let rules: RoomWriteRules;
+  try {
+    rules = host.permissions.rulesFor(name) ?? {};
+  } catch (error) {
+    doc.destroy();
+    return { ok: false, error: toError(error) };
+  }
   const awareness = new Awareness(doc);
   awareness.setLocalState(null);
   const context: RoomStoreContext = {
@@ -92,7 +105,7 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
     members: new Set(),
     owners: createAwarenessOwners(),
     store,
-    rules: host.permissions.rulesFor(name) ?? {},
+    rules,
     broadcast: (frame, except) => room.members.forEach((m) => m !== except && m.send(frame)),
     leave: (member) => removeMember(room, member),
     destroy: () => {

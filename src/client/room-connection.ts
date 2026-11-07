@@ -39,6 +39,7 @@ function resendMissing(connection: RoomConnection) {
 
 /** Asks the server to say once it has stored every local change made so far. */
 export function requestReceipt(connection: RoomConnection): Promise<boolean> {
+  if (connection.store.get().refusal !== null) return Promise.resolve(false);
   const receipt = connection.receipts.request();
   const { session } = connection;
   if (session && connection.store.get().synced) connection.receipts.sendPending(session.send);
@@ -106,17 +107,22 @@ function canConnect(connection: RoomConnection) {
 
 /** Opens a socket unless one is open or the connection should stay closed. */
 export function openSession(connection: RoomConnection): void {
-  connection.reconnectTimer = null;
+  cancelReconnect(connection);
   if (connection.session || !canConnect(connection)) return;
   connection.store.update({ status: 'connecting' });
-  connection.session = openSocketSession(connection.url(), connection, {
-    onOpen: () => connection.store.update({ status: 'connected', refusal: null }),
-    onRemoteUpdate: (update, isSyncStep2) => handleRemoteUpdate(connection, update, isSyncStep2),
-    onAuth: (message) => handleAuth(connection, message),
-    onStateless: (payload) => notifyStateless(connection, payload),
-    onStorage: (message) => handleStorage(connection, message),
-    onClose: (code) => handleClose(connection, code),
-  });
+  try {
+    connection.session = openSocketSession(connection.url(), connection, {
+      onOpen: () => connection.store.update({ status: 'connected', refusal: null }),
+      onRemoteUpdate: (update, isSyncStep2) => handleRemoteUpdate(connection, update, isSyncStep2),
+      onAuth: (message) => handleAuth(connection, message),
+      onStateless: (payload) => notifyStateless(connection, payload),
+      onStorage: (message) => handleStorage(connection, message),
+      onClose: (code) => handleClose(connection, code),
+    });
+  } catch (error) {
+    handleClose(connection, null);
+    connection.report('Opening a connection failed.', error);
+  }
 }
 
 /** Schedules the next attempt with exponential backoff: 0 ms after an open socket closed. */

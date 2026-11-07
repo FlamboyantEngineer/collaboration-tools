@@ -126,7 +126,7 @@ function sendAllAwareness({ room, member }: MemberContext) {
  */
 export function readMemberFrame(frame: Uint8Array, context: MemberContext): void {
   const decoder = decoding.createDecoder(frame);
-  while (decoding.hasContent(decoder)) {
+  while (context.room.members.has(context.member) && decoding.hasContent(decoder)) {
     const type = decoding.readVarUint(decoder);
     if (type === MESSAGE_TYPES.sync) readSync(decoder, context);
     else if (type === MESSAGE_TYPES.awareness) readAwareness(decoder, context);

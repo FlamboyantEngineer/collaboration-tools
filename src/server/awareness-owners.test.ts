@@ -1,3 +1,4 @@
+import * as encoding from 'lib0/encoding';
 import { describe, expect, it } from 'vitest';
 import {
   type AwarenessEntry,
@@ -49,4 +50,9 @@ describe('createAwarenessOwners', () => {
 
     expect(decodeAwarenessEntries(encodeAwarenessEntries(entries))).toEqual(entries);
   });
+});
+
+it('COLLAB-SERVER-2.4 rejects an impossible awareness count before allocating its entries', () => {
+  const update = encoding.encode((encoder) => encoding.writeVarUint(encoder, 2 ** 32));
+  expect(() => decodeAwarenessEntries(update)).toThrow('awareness');
 });

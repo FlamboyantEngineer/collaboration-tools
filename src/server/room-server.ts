@@ -4,7 +4,7 @@ import { encodeAwarenessFrame } from '../protocol/frames.js';
 import { CLOSE_CODES, encodeStatelessMessage } from '../protocol/messages.js';
 import { encodeAwarenessEntries } from './awareness-owners.js';
 import type { RoomHost } from './host/adapters.js';
-import { resolveRoomHost } from './host/host.js';
+import { type ResolvedRoomHost, resolveRoomHost } from './host/host.js';
 import { createRoomRegistry } from './room-registry.js';
 import {
   connectMember,
@@ -65,10 +65,9 @@ export interface RoomServer {
 
 const KEEPALIVE_FRAME = encodeAwarenessFrame(encodeAwarenessEntries([]));
 
-export function createRoomServer(options: RoomServerOptions): RoomServer {
-  const host = resolveRoomHost(options.host);
+function createRegistry(options: RoomServerOptions, host: ResolvedRoomHost) {
   const retryMs = options.storeRetryMs ?? 1_000;
-  const registry = createRoomRegistry({
+  return createRoomRegistry({
     host,
     timing: {
       debounceMs: options.storeDebounceMs ?? 2_000,
@@ -80,8 +79,14 @@ export function createRoomServer(options: RoomServerOptions): RoomServer {
       for (const member of [...room.members]) member.close(CLOSE_CODES.conflict, 'conflict');
     },
   });
+}
+
+export function createRoomServer(options: RoomServerOptions): RoomServer {
+  const host = resolveRoomHost(options.host);
+  const registry = createRegistry(options, host);
   const keepaliveMs = options.keepaliveMs ?? 10_000;
   let closed = false;
+  let closing: Promise<void> | null = null;
   let keepalive: RoomTimer | null = null;
 
   // The timer runs only while rooms are loaded, so an idle server holds no timer.
@@ -100,6 +105,7 @@ export function createRoomServer(options: RoomServerOptions): RoomServer {
     registry,
     onStateless: options.onStateless,
     onJoin: () => startKeepalive(),
+    connections: new Set<() => void>(),
   };
 
   const connect = (socket: RoomServerSocket, request: RoomServerRequest) => {
@@ -112,6 +118,10 @@ export function createRoomServer(options: RoomServerOptions): RoomServer {
     if (closed) throw new Error('The room server is closed.');
     const load = await registry.acquire(room);
     if (!load.ok) throw load.error;
+    if (closed) {
+      registry.release(load.room);
+      throw new Error('The room server is closed.');
+    }
     startKeepalive();
     let released = false;
     return {
@@ -125,15 +135,13 @@ export function createRoomServer(options: RoomServerOptions): RoomServer {
     };
   };
 
-  const close = async () => {
-    if (closed) return;
+  const close = () => {
+    if (closing) return closing;
     closed = true;
     if (keepalive !== null) host.clock.clearTimeout(keepalive);
-    const rooms = registry.rooms();
-    for (const room of rooms) {
-      for (const member of [...room.members]) member.close(CLOSE_CODES.shutdown, 'shutdown');
-    }
-    await registry.close();
+    for (const shutdown of [...dependencies.connections]) shutdown();
+    closing = registry.close();
+    return closing;
   };
 
   return {

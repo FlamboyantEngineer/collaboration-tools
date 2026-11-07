@@ -13,6 +13,9 @@ export interface AwarenessEntry {
 export function decodeAwarenessEntries(update: Uint8Array): AwarenessEntry[] {
   const decoder = decoding.createDecoder(update);
   const count = decoding.readVarUint(decoder);
+  // Each entry needs at least one byte each for its id, clock and string length.
+  if (count > Math.floor((update.length - decoder.pos) / 3))
+    throw new Error('Invalid awareness entry count.');
   return Array.from({ length: count }, () => ({
     clientId: decoding.readVarUint(decoder),
     clock: decoding.readVarUint(decoder),

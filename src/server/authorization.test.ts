@@ -1,11 +1,13 @@
 import { Doc, encodeStateAsUpdate, encodeStateVector } from '@y/y';
 import * as decoding from 'lib0/decoding';
+import * as encoding from 'lib0/encoding';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createManualClock, type ManualClock } from '../../test/manual-clock.js';
+import { createDeferred } from '../../test/promise-fixtures.js';
 import { connectToServer, settle } from '../../test/server-sockets.js';
 import { createRoomProvider, type RoomProvider } from '../client/room-provider.js';
 import { encodeSyncUpdate } from '../protocol/frames.js';
-import { CLOSE_CODES, MESSAGE_TYPES } from '../protocol/messages.js';
+import { CLOSE_CODES, encodeStatelessMessage, MESSAGE_TYPES } from '../protocol/messages.js';
 import type { RoomAdmission, RoomAuth, RoomWriteRules } from './host/adapters.js';
 import { createMemoryPersistence } from './host/memory-persistence.js';
 import { createRoomServer, type RoomServer } from './room-server.js';
@@ -171,7 +173,13 @@ describe('re-authorization', () => {
     const clientClock = createManualClock();
     const { sockets, open } = serve(
       null,
-      { admit: () => Promise.resolve({ ...ADMISSIONS.editor, expiresAt: 1_000 } as RoomAdmission) },
+      {
+        admit: () =>
+          Promise.resolve({
+            ...ADMISSIONS.editor,
+            expiresAt: clock.now() + 1_000,
+          } as RoomAdmission),
+      },
       clock,
     );
     const provider = open('editor', clientClock);
@@ -248,4 +256,203 @@ describe('re-authorization', () => {
       reason: 'expired',
     });
   });
+});
+
+describe('authorization boundaries', () => {
+  it('COLLAB-SERVER-7.2 stops the rest of a frame after a refused write', async () => {
+    const { server } = serve({ serverOnly: ['private'] });
+    const handle = await server.openRoom('notes');
+    const close = vi.fn();
+    const connection = server.connect(
+      { send: () => undefined, close },
+      { url: '/live/notes?token=editor', headers: {} },
+    );
+    await settle();
+    const denied = new Doc();
+    denied.get('private').insert(0, 'denied');
+    const later = new Doc();
+    later.get('body').insert(0, 'must not apply');
+    const frame = encoding.encode((encoder) => {
+      encoding.writeUint8Array(encoder, encodeSyncUpdate(encodeStateAsUpdate(denied)));
+      encoding.writeUint8Array(encoder, encodeSyncUpdate(encodeStateAsUpdate(later)));
+      encoding.writeUint8Array(encoder, encodeStatelessMessage('must not deliver'));
+    });
+
+    connection.receive(frame);
+
+    expect(close).toHaveBeenCalledWith(CLOSE_CODES.forbidden, 'unauthorized-write');
+    expect(handle.doc.get('private').toString()).toBe('');
+    expect(handle.doc.get('body').toString()).toBe('');
+    handle.release();
+    denied.destroy();
+    later.destroy();
+  });
+
+  it('COLLAB-SERVER-7.2 applies fallback rules to names inherited from Object.prototype', async () => {
+    const { server, open } = serve({ required: {}, otherwise: 'comment' });
+    const editor = open('editor');
+    await settle();
+    editor.doc.get('constructor').insert(0, 'allowed');
+    await settle();
+    const handle = await server.openRoom('notes');
+
+    expect(editor.getState().refusal).toBeNull();
+    expect(handle.doc.get('constructor').toString()).toBe('allowed');
+    handle.release();
+  });
+
+  it('COLLAB-SERVER-7.4 expires while refresh is unresolved and ignores its late decision', async () => {
+    const clock = createManualClock(0);
+    const decision = createDeferred<RoomAdmission>();
+    const refresh = vi.fn(() => decision.promise);
+    const { sockets, open } = serve(
+      null,
+      {
+        admit: () => Promise.resolve({ ...ADMISSIONS.editor, expiresAt: 60_000 } as RoomAdmission),
+        refresh,
+      },
+      clock,
+    );
+    const provider = open('editor');
+    await settle();
+    clock.advance(30_000);
+    await settle();
+    expect(refresh).toHaveBeenCalledOnce();
+    clock.advance(30_000);
+    await settle();
+    expect(sockets.sockets[0]?.serverClose).toEqual({
+      code: CLOSE_CODES.unauthenticated,
+      reason: 'expired',
+    });
+
+    decision.resolve({ ok: true, actor: { id: 'e' }, access: 'read-write', expiresAt: 120_000 });
+    await settle();
+    expect(provider.getState().status).toBe('disconnected');
+    expect(clock.pendingDelays().filter((delay) => delay > 10_000)).toEqual([]);
+  });
+});
+
+it('COLLAB-SERVER-7.4 refuses an already expired admission before replaying queued writes', async () => {
+  const { server } = serve(
+    null,
+    {
+      admit: () =>
+        Promise.resolve({ ok: true, actor: { id: 'e' }, access: 'read-write', expiresAt: 0 }),
+    },
+    createManualClock(1_000),
+  );
+  const handle = await server.openRoom('notes');
+  const close = vi.fn();
+  const connection = server.connect(
+    { send: () => undefined, close },
+    { url: '/live/notes', headers: {} },
+  );
+  const writer = new Doc();
+  writer.get('body').insert(0, 'expired');
+  connection.receive(encodeSyncUpdate(encodeStateAsUpdate(writer)));
+  await settle();
+
+  expect(handle.doc.get('body').toString()).toBe('');
+  expect(close).toHaveBeenCalledWith(CLOSE_CODES.unauthenticated, 'expired');
+  handle.release();
+  writer.destroy();
+});
+
+it('COLLAB-SERVER-1.3 recovers after the permissions adapter throws while loading', async () => {
+  let failing = true;
+  const other = createRoomServer({
+    host: {
+      auth: {
+        admit: () => Promise.resolve({ ok: true, actor: { id: 'e' }, access: 'read-write' }),
+      },
+      persistence: createMemoryPersistence(),
+      clock: createManualClock(),
+      permissions: {
+        rulesFor: () => {
+          if (failing) throw new Error('rules failed');
+          return null;
+        },
+      },
+    },
+  });
+  servers.push(other);
+  await expect(other.openRoom('notes')).rejects.toThrow('rules failed');
+  expect(other.roomCount()).toBe(0);
+  failing = false;
+  const handle = await other.openRoom('notes');
+  expect(handle.room).toBe('notes');
+  handle.release();
+});
+
+it('COLLAB-SERVER-7.4 starts no refresh after a queued write closes the connection', async () => {
+  const clock = createManualClock(0);
+  const refresh = vi.fn(() => Promise.resolve(ADMISSIONS.editor as RoomAdmission));
+  const { server } = serve(
+    { serverOnly: ['private'] },
+    {
+      admit: () => Promise.resolve({ ...ADMISSIONS.editor, expiresAt: 60_000 } as RoomAdmission),
+      refresh,
+    },
+    clock,
+  );
+  const connection = server.connect(
+    { send: () => undefined, close: () => undefined },
+    { url: '/live/notes', headers: {} },
+  );
+  const writer = new Doc();
+  writer.get('private').insert(0, 'denied');
+  connection.receive(encodeSyncUpdate(encodeStateAsUpdate(writer)));
+  await settle();
+  clock.advance(60_000);
+  await settle();
+
+  expect(refresh).not.toHaveBeenCalled();
+  expect(clock.pendingDelays()).toEqual([]);
+  writer.destroy();
+});
+
+it('COLLAB-SERVER-7.4 closes when refresh returns an already expired decision', async () => {
+  const clock = createManualClock(0);
+  const { sockets, open } = serve(
+    null,
+    {
+      admit: () => Promise.resolve({ ...ADMISSIONS.editor, expiresAt: 60_000 } as RoomAdmission),
+      refresh: () => Promise.resolve({ ...ADMISSIONS.editor, expiresAt: 30_000 } as RoomAdmission),
+    },
+    clock,
+  );
+  open('editor');
+  await settle();
+  clock.advance(30_000);
+  await settle();
+
+  expect(sockets.sockets[0]?.serverClose).toEqual({
+    code: CLOSE_CODES.unauthenticated,
+    reason: 'expired',
+  });
+});
+
+it('COLLAB-SERVER-7.4 spaces refreshes for decisions shorter than the refresh lead', async () => {
+  const clock = createManualClock(0);
+  const refresh = vi.fn(() =>
+    Promise.resolve({ ...ADMISSIONS.editor, expiresAt: clock.now() + 10_000 } as RoomAdmission),
+  );
+  const { open } = serve(
+    null,
+    {
+      admit: () => Promise.resolve({ ...ADMISSIONS.editor, expiresAt: 60_000 } as RoomAdmission),
+      refresh,
+    },
+    clock,
+  );
+  open('editor');
+  await settle();
+  clock.advance(30_000);
+  await settle();
+  clock.advance(0);
+  await settle();
+  expect(refresh).toHaveBeenCalledOnce();
+  clock.advance(5_000);
+  await settle();
+  expect(refresh).toHaveBeenCalledTimes(2);
 });

@@ -6,7 +6,7 @@
 
 ### COLLAB-SERVER-1.1 - Access and refusal
 
-`connect(socket, { url, headers })` shall read the room, token and parameters from the URL (COLLAB-PROTOCOL-2.2) and pass them with the headers to `host.auth.admit`. An admitted connection shall receive an auth granted message with its access, the room's sync step 1 and every awareness state in the room. A refused connection shall receive an auth denied message with the reason and be closed with `CLOSE_CODES.unauthenticated` (4401), `forbidden` (4403) or `notFound` (4404); it loads no room. Frames that arrive before admission completes shall be read in order once the connection joins.
+`connect(socket, { url, headers })` shall read the room, token and parameters from the URL (COLLAB-PROTOCOL-2.2) and pass them with the headers to `host.auth.admit`. An admitted connection shall receive an auth granted message with its access, the room's sync step 1 and every awareness state in the room. A refused connection shall receive an auth denied message with the reason and be closed with `CLOSE_CODES.unauthenticated` (4401), `forbidden` (4403) or `notFound` (4404); it loads no room. Frames that arrive before admission completes shall be read in order once the connection joins; a connection that closes before then shall discard its queued frames.
 
 Implementation: `src/server/room-server.ts`, `src/server/server-connection.ts`, `src/server/member-frames.ts`, `src/protocol/messages.ts`
 Verification: `src/server/room-server.test.ts`
@@ -20,10 +20,10 @@ Verification: `src/server/room-server.test.ts`
 
 ### COLLAB-SERVER-1.3 - Failures
 
-A URL that names no room shall close the socket with `CLOSE_CODES.badRequest` (4400). When admission throws, or the room cannot load because storage is unavailable, the server shall log it and close the socket with `CLOSE_CODES.unavailable` (1011) without an auth message, so the client keeps reconnecting.
+A URL that names no room shall close the socket with `CLOSE_CODES.badRequest` (4400). When admission throws, or the room cannot load because storage or its permissions adapter fails, the server shall log it and close the socket with `CLOSE_CODES.unavailable` (1011) without an auth message, so the client keeps reconnecting. A failed room load shall release its registry entry and document, so a later attempt can load again.
 
 Implementation: `src/server/server-connection.ts`, `src/server/room-registry.ts`
-Verification: `src/server/room-server.test.ts`
+Verification: `src/server/room-server.test.ts`, `src/server/authorization.test.ts`
 
 ## COLLAB-SERVER-2 - Sync
 
@@ -50,10 +50,10 @@ Verification: `src/server/room-server.test.ts`
 
 ### COLLAB-SERVER-2.4 - Unreadable frames
 
-A frame that cannot be decoded or applied shall be logged and close the socket with `CLOSE_CODES.badRequest`. A message type the server does not know shall end the frame (COLLAB-PROTOCOL-1.1).
+An awareness entry count shall be bounded by the bytes remaining before allocating its entries. A frame that cannot be decoded or applied shall be logged and close the socket with `CLOSE_CODES.badRequest`. A message type the server does not know shall end the frame (COLLAB-PROTOCOL-1.1).
 
-Implementation: `src/server/server-connection.ts`, `src/server/member-frames.ts`
-Verification: `src/server/room-server.test.ts`
+Implementation: `src/server/server-connection.ts`, `src/server/member-frames.ts`, `src/server/awareness-owners.ts`
+Verification: `src/server/room-server.test.ts`, `src/server/awareness-owners.test.ts`
 
 ## COLLAB-SERVER-3 - Awareness
 
@@ -82,14 +82,14 @@ Verification: `src/server/awareness-owners.test.ts`
 
 ### COLLAB-SERVER-4.1 - Loading
 
-A room shall load through `host.persistence.load`. A `found` state shall rebuild the document, and the next store shall build on its revision. A `missing` room shall start from its seed (COLLAB-SERVER-8.2) with no base revision. A `corrupt` state, or a found state whose update cannot be applied, shall be logged and start from its seed, storing over the unreadable state's revision. An `unavailable` load, or a load that throws, shall fail the join (COLLAB-SERVER-1.3).
+A room shall load through `host.persistence.load`. A `found` state shall rebuild the document, and the next store shall build on its revision. A `missing` room shall start from its seed (COLLAB-SERVER-8.2) with no base revision. A `corrupt` state, or a found state whose update cannot be applied or leaves unresolved Yjs dependencies, shall be logged and start from its seed, storing over the unreadable state's revision. An `unavailable` load, or a load that throws, shall fail the join (COLLAB-SERVER-1.3).
 
 Implementation: `src/server/live-room.ts`, `src/server/stored-room.ts`
-Verification: `src/server/room-storage.test.ts`
+Verification: `src/server/room-storage.test.ts`, `src/server/durability.test.ts`
 
 ### COLLAB-SERVER-4.2 - Store scheduling
 
-A change shall be stored `storeDebounceMs` (default 2000) after the last change, but no later than `storeMaxDebounceMs` (default 10000) after the first unstored one, one store at a time, as a full-state update with `baseRevision` set to the last stored revision. A store that resolves `unavailable` or throws shall be retried after `storeRetryMs` (default 1000), doubling up to 30000 ms; a change made while a retry waits shall wait for it, not start a debounce of its own.
+A change shall be stored `storeDebounceMs` (default 2000) after the last change, but no later than `storeMaxDebounceMs` (default 10000) after the first unstored one, one store at a time, as a full-state update with `baseRevision` set to the last stored revision. A store that resolves `unavailable` or throws shall be retried after `storeRetryMs` (default 1000), doubling up to 30000 ms; a change made while a retry waits shall wait for it, not start a debounce of its own. Cancelling the scheduler during a store shall prevent its result from scheduling another retry.
 
 Implementation: `src/server/store-scheduler.ts`, `src/server/live-room.ts`, `src/server/stored-room.ts`, `src/server/room-server.ts`
 Verification: `src/server/store-scheduler.test.ts`
@@ -110,7 +110,7 @@ Verification: `src/server/room-storage.test.ts`
 
 ### COLLAB-SERVER-4.5 - Shutdown
 
-`close()` shall close every member with `CLOSE_CODES.shutdown` (1001), store every room once more, logging a room whose changes could not be stored, and unload them all. Later connections shall be closed with `CLOSE_CODES.shutdown`, and `openRoom` shall reject. `flush()` shall store every room's pending changes now.
+`close()` shall close every connection, including those awaiting admission or room loading, with `CLOSE_CODES.shutdown` (1001), store every room once more, logging a room whose changes could not be stored, and unload them all. Later connections shall be closed with `CLOSE_CODES.shutdown`, and `openRoom` shall reject, including a handle still loading when shutdown begins. Every concurrent `close()` shall wait for the same shutdown to complete. `flush()` shall store every room's pending changes now.
 
 Implementation: `src/server/room-server.ts`, `src/server/room-registry.ts`
 Verification: `src/server/room-storage.test.ts`
@@ -165,21 +165,21 @@ Verification: `src/server/update-changes.test.ts`
 
 ### COLLAB-SERVER-7.2 - Write rules
 
-`host.permissions.rulesFor(room)` shall give a room its `RoomWriteRules` when it loads. A changed top-level type in `serverOnly`, or the room metadata type (COLLAB-PROTOCOL-3.1) in every room, shall refuse the update; otherwise the type shall need the capability `required` names for it, or `otherwise` when it is not named, or nothing beyond read-write access. When the lists allow the change, the rules' `check(change)` shall decide, with the room, actor, capabilities and changes; `change.simulate(inspect)` shall run `inspect` on a copy of the room with a function that applies the update to it. A `check` that throws shall refuse. A refused update shall not be applied: the server shall log it, send an auth denied message with `unauthorized-write` and close the socket with `CLOSE_CODES.forbidden`. The host's room handles are not checked.
+`host.permissions.rulesFor(room)` shall give a room its `RoomWriteRules` when it loads. A changed top-level type in `serverOnly`, or the room metadata type (COLLAB-PROTOCOL-3.1) in every room, shall refuse the update; otherwise the type shall need the capability `required` names for it, or `otherwise` when it has no own entry in `required`, or nothing beyond read-write access. When the lists allow the change, the rules' `check(change)` shall decide, with the room, actor, capabilities and changes; `change.simulate(inspect)` shall run `inspect` on a copy of the room with a function that applies the update to it. A `check` that throws shall refuse. A refused update shall not be applied: the server shall log it, send an auth denied message with `unauthorized-write` and close the socket with `CLOSE_CODES.forbidden`, and stop processing the remainder of that frame. The host's room handles are not checked.
 
 Implementation: `src/server/write-rules.ts`, `src/server/member-frames.ts`, `src/server/server-connection.ts`, `src/server/live-room.ts`, `src/server/host/adapters.ts`, `src/server/host/host.ts`
 Verification: `src/server/authorization.test.ts`, `src/server/host/host.test.ts`
 
 ### COLLAB-SERVER-7.3 - Incomplete updates
 
-An update that builds on content the room lacks shall not be applied or held back, since it would later apply unchecked; the server shall answer it with a sync step 1, so the client sends everything the room lacks.
+An update that builds on content the room lacks, including either its left or right neighbour, shall not be applied or held back, since it would later apply unchecked; the server shall answer it with a sync step 1, so the client sends everything the room lacks.
 
 Implementation: `src/server/update-changes.ts`, `src/server/member-frames.ts`
 Verification: `src/server/update-changes.test.ts`, `src/server/authorization.test.ts`
 
 ### COLLAB-SERVER-7.4 - Expiry and refresh
 
-When admission gives an `expiresAt`, the server shall call `host.auth.refresh` with the admission request, the canonical room and the actor 30 seconds before then. A refused decision shall send an auth denied message and close the socket with the refusal's close code. An admitted one shall replace the connection's capabilities, send an auth granted message when the access changed, and, with a new `expiresAt`, schedule the next refresh. A refresh that throws shall be logged and retried every 5 seconds. When the decision expires with no fresh one, or the auth adapter has no `refresh`, the server shall close the socket with `CLOSE_CODES.unauthenticated` and reason `expired`, without an auth message, so the client reconnects with a fresh token.
+When admission gives an `expiresAt`, the server shall call `host.auth.refresh` with the admission request, the canonical room and the actor 30 seconds before then. A refused decision shall send an auth denied message and close the socket with the refusal's close code. An admitted one shall replace the connection's capabilities, send an auth granted message when the access changed, and, with a new `expiresAt`, schedule the next refresh. A refresh that throws shall be logged and retried every 5 seconds. Successive refreshes shall be at least 5 seconds apart even when a new decision expires within the 30-second refresh lead. An admission already expired when its room finishes loading shall close before joining or replaying queued frames. When the decision expires with no fresh one, including while a refresh remains unresolved, or the auth adapter has no `refresh`, the server shall close the socket with `CLOSE_CODES.unauthenticated` and reason `expired`, without an auth message, so the client reconnects with a fresh token. A refresh result arriving after expiry or closure shall be ignored; an already expired refresh decision shall close the connection.
 
 Implementation: `src/server/reauthorization.ts`, `src/server/server-connection.ts`
 Verification: `src/server/authorization.test.ts`
@@ -195,7 +195,7 @@ Verification: `src/server/durability.test.ts`
 
 ### COLLAB-SERVER-8.2 - Seeds and stale rooms
 
-A room that is `missing`, `corrupt` or `stale` shall start from `host.seeds.seed(room)`, a Yjs update that builds its content, or empty when the seed is `null`, and a `corrupt` or `stale` one shall store over the revision of the state it replaces. A seed that throws, or cannot be applied, shall fail the load.
+A room that is `missing`, `corrupt` or `stale` shall start from `host.seeds.seed(room)`, a Yjs update that builds its content, or empty when the seed is `null`, and a `corrupt` or `stale` one shall store over the revision of the state it replaces. A seed that throws, or cannot be applied completely without unresolved Yjs dependencies, shall fail the load.
 
 Implementation: `src/server/stored-room.ts`, `src/server/host/adapters.ts`, `src/server/host/host.ts`
 Verification: `src/server/durability.test.ts`

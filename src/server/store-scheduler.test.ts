@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createManualClock } from '../../test/manual-clock.js';
+import { createDeferred } from '../../test/promise-fixtures.js';
 import { settle } from '../../test/server-sockets.js';
 import { createStoreScheduler, type StoreOutcome } from './store-scheduler.js';
 
@@ -112,4 +113,26 @@ describe('createStoreScheduler', () => {
     await expect(second).resolves.toBe(false);
     await expect(store.whenStored()).resolves.toBe(false);
   });
+});
+
+it('COLLAB-SERVER-4.2 does not schedule a retry after cancellation during a store', async () => {
+  const clock = createManualClock();
+  const pending = createDeferred<StoreOutcome>();
+  const store = createStoreScheduler({
+    clock,
+    debounceMs: 100,
+    maxDebounceMs: 250,
+    retryInitialMs: 50,
+    retryMaxMs: 150,
+    store: () => pending.promise,
+  });
+  store.markDirty();
+  const receipt = store.whenStored();
+  const flushing = store.flush();
+  store.cancel();
+  pending.resolve('retry');
+  await flushing;
+
+  await expect(receipt).resolves.toBe(false);
+  expect(clock.pendingDelays()).toEqual([]);
 });

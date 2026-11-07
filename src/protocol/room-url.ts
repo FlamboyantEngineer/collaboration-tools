@@ -36,6 +36,7 @@ export function buildRoomUrl(options: BuildRoomUrlOptions): string {
   for (const [key, value] of Object.entries(options.params ?? {})) {
     if (!RESERVED_PARAMS.has(key)) url.searchParams.set(key, value);
   }
+  for (const key of RESERVED_PARAMS) url.searchParams.delete(key);
   if (options.generation) url.searchParams.set(GENERATION_PARAM, options.generation);
   if (options.token) url.searchParams.set(TOKEN_PARAM, options.token);
   return url.toString();
@@ -46,19 +47,18 @@ export function buildRoomUrl(options: BuildRoomUrlOptions): string {
  * the room is the last path segment. Returns `null` when the path names no room.
  */
 export function parseRoomUrl(path: string): RoomUrlParts | null {
-  const url = new URL(path, 'http://room.invalid');
-  const segment = url.pathname.split('/').pop() ?? '';
+  let url: URL;
   let room: string;
   try {
-    room = decodeURIComponent(segment);
+    url = new URL(path, 'http://room.invalid');
+    room = decodeURIComponent(url.pathname.split('/').pop() ?? '');
   } catch {
     return null;
   }
   if (!room) return null;
-  const params: Record<string, string> = {};
-  url.searchParams.forEach((value, key) => {
-    if (!RESERVED_PARAMS.has(key)) params[key] = value;
-  });
+  const params = Object.fromEntries(
+    [...url.searchParams].filter(([key]) => !RESERVED_PARAMS.has(key)),
+  );
   const { searchParams } = url;
   return {
     room,

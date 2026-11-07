@@ -73,3 +73,21 @@ describe('analyzeUpdate', () => {
     expect(changes(doc, first)).toEqual({ body: [null] });
   });
 });
+
+it('COLLAB-SERVER-7.3 detects a missing right neighbour even when the left one is held', () => {
+  const room = new Doc();
+  room.get('body').insert(0, 'a');
+  const peer = new Doc();
+  applyUpdate(peer, encodeStateAsUpdate(room));
+  peer.get('body').insert(1, 'b');
+  const writer = new Doc();
+  applyUpdate(writer, encodeStateAsUpdate(peer));
+  const before = encodeStateVector(writer);
+  writer.get('body').insert(1, 'x');
+  const update = encodeStateAsUpdate(writer, before);
+
+  expect(analyzeUpdate(room, update)).toEqual({ complete: false });
+  room.destroy();
+  peer.destroy();
+  writer.destroy();
+});

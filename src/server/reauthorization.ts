@@ -24,22 +24,41 @@ export function startReauthorization(options: ReauthorizationOptions): () => voi
   let expiresAt = options.expiresAt;
   let timer: RoomTimer | null = null;
   let stopped = false;
+  let expiryTimer: RoomTimer | null = null;
+  const stop = () => {
+    stopped = true;
+    if (timer !== null) clock.clearTimeout(timer);
+    if (expiryTimer !== null) clock.clearTimeout(expiryTimer);
+  };
+  const expire = () => {
+    stop();
+    options.onExpired();
+  };
 
   const wait = (at: number) => {
     timer = clock.setTimeout(() => void run(), Math.max(0, at - clock.now()));
   };
-  const arm = () => wait(host.auth.refresh ? expiresAt - REFRESH_LEAD_MS : expiresAt);
+  const arm = (notBefore = clock.now()) => {
+    if (expiryTimer !== null) clock.clearTimeout(expiryTimer);
+    expiryTimer = clock.setTimeout(expire, Math.max(0, expiresAt - clock.now()));
+    if (host.auth.refresh) wait(Math.max(notBefore, expiresAt - REFRESH_LEAD_MS));
+  };
 
   const run = async () => {
     timer = null;
-    if (!host.auth.refresh || clock.now() >= expiresAt) return options.onExpired();
+    if (stopped) return;
+    if (!host.auth.refresh || clock.now() >= expiresAt) return expire();
     try {
       const decision = await host.auth.refresh(request);
       if (stopped) return;
+      if (clock.now() >= expiresAt) return expire();
+      if (decision.ok && decision.expiresAt !== undefined && decision.expiresAt <= clock.now())
+        return expire();
       options.onDecision(decision);
-      if (!decision.ok || decision.expiresAt === undefined) return;
+      if (stopped) return;
+      if (!decision.ok || decision.expiresAt === undefined) return stop();
       expiresAt = decision.expiresAt;
-      arm();
+      arm(clock.now() + REFRESH_RETRY_MS);
     } catch (error) {
       if (stopped) return;
       host.logger.warn('Refreshing a connection’s access failed; retrying.', {
@@ -51,8 +70,5 @@ export function startReauthorization(options: ReauthorizationOptions): () => voi
   };
 
   arm();
-  return () => {
-    stopped = true;
-    if (timer !== null) clock.clearTimeout(timer);
-  };
+  return stop;
 }

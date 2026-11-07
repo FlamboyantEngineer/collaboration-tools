@@ -50,3 +50,21 @@ describe('room URLs', () => {
     });
   });
 });
+
+it('COLLAB-PROTOCOL-2.2 preserves prototype-named parameters as own data properties', () => {
+  const parsed = parseRoomUrl('/live/r?__proto__=value&constructor=other');
+  expect(parsed?.params).toHaveProperty('__proto__', 'value');
+  expect(Object.keys(parsed?.params ?? {})).toEqual(['__proto__', 'constructor']);
+});
+
+it('COLLAB-PROTOCOL-2.1 removes stale reserved parameters from the endpoint', () => {
+  const url = buildRoomUrl({
+    endpoint: 'wss://host.test/live?token=old&generation=old&region=eu',
+    room: 'r',
+  });
+  expect(url).toBe('wss://host.test/live/r?region=eu');
+});
+
+it('COLLAB-PROTOCOL-2.2 returns null for an invalid URL', () => {
+  expect(parseRoomUrl('http://[')).toBeNull();
+});
