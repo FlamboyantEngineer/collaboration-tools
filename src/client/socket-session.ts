@@ -7,15 +7,18 @@ import { encodeAwarenessFrame, encodeSyncStep1, readServerFrame } from './frames
 import { frameBytes, type RoomSocket, type RoomSocketFactory } from './room-socket.js';
 import { createStaleSocketCheck } from './stale-socket-check.js';
 
-export interface SocketSessionOptions {
-  url: string;
-  createSocket: RoomSocketFactory;
-  clock: RoomClock;
-  doc: Doc;
-  awareness: Awareness;
-  origin: unknown;
-  socketTimeoutMs: number;
-  checkCadenceMs: number;
+/** What every socket of one provider shares. */
+export interface SocketConfig {
+  readonly createSocket: RoomSocketFactory;
+  readonly clock: RoomClock;
+  readonly doc: Doc;
+  readonly awareness: Awareness;
+  /** The transaction origin of everything the server sends. */
+  readonly origin: object;
+  readonly socketTimeoutMs: number;
+}
+
+export interface SocketEvents {
   onOpen(): void;
   onRemoteUpdate(update: Uint8Array, isSyncStep2: boolean): void;
   onAuth(message: AuthMessage): void;
@@ -34,30 +37,37 @@ export interface SocketSession {
   close(): void;
 }
 
-function sendOpeningFrames(socket: RoomSocket, options: SocketSessionOptions) {
-  socket.send(encodeSyncStep1(options.doc));
-  const { awareness } = options;
+/** How often the stale-socket check runs. */
+const CHECK_CADENCE_MS = 4_000;
+
+function sendOpeningFrames(socket: RoomSocket, { doc, awareness }: SocketConfig) {
+  socket.send(encodeSyncStep1(doc));
   if (awareness.getLocalState() !== null) {
     socket.send(encodeAwarenessFrame(awareness, [awareness.clientID]));
   }
 }
 
-/** Opens a socket and drives it until it closes. */
-export function openSocketSession(options: SocketSessionOptions): SocketSession {
-  const { clock } = options;
-  const socket = options.createSocket(options.url);
+/** Opens a socket to `url` and drives it until it closes. */
+export function openSocketSession(
+  url: string,
+  config: SocketConfig,
+  events: SocketEvents,
+): SocketSession {
+  const { clock } = config;
+  const socket = config.createSocket(url);
   socket.binaryType = 'arraybuffer';
   let open = false;
   let closed = false;
   let lastMessageAt = clock.now();
+  const frameContext = { ...config, ...events };
 
   const finish = (code: number | null) => {
     if (closed) return;
     closed = true;
     open = false;
     staleCheck.stop();
-    socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null;
-    options.onClose(code);
+    socket.onopen = socket.onmessage = socket.onclose = null;
+    events.onClose(code);
   };
   const close = () => {
     try {
@@ -68,8 +78,8 @@ export function openSocketSession(options: SocketSessionOptions): SocketSession 
   };
   const staleCheck = createStaleSocketCheck({
     clock,
-    timeoutMs: options.socketTimeoutMs,
-    cadenceMs: options.checkCadenceMs,
+    timeoutMs: config.socketTimeoutMs,
+    cadenceMs: CHECK_CADENCE_MS,
     lastMessageAt: () => lastMessageAt,
     onStale: close,
   });
@@ -83,22 +93,21 @@ export function openSocketSession(options: SocketSessionOptions): SocketSession 
     open = true;
     lastMessageAt = clock.now();
     staleCheck.start();
-    options.onOpen();
-    sendOpeningFrames(socket, options);
+    events.onOpen();
+    sendOpeningFrames(socket, config);
   };
   socket.onmessage = (event) => {
     lastMessageAt = clock.now();
     const frame = frameBytes(event.data);
     if (!frame) return;
     try {
-      const reply = readServerFrame(frame, options);
+      const reply = readServerFrame(frame, frameContext);
       if (reply) send(reply);
     } catch (error) {
       reportListenerError(error);
     }
   };
   socket.onclose = (event) => finish(event.code);
-  socket.onerror = () => undefined;
 
   return { isOpen: () => open, send, close };
 }

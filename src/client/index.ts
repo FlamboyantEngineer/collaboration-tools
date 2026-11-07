@@ -9,9 +9,4 @@ export {
   type RoomProvider,
   type RoomProviderOptions,
 } from './room-provider.js';
-export {
-  type ConnectivityEvents,
-  PLATFORM_SOCKET_FACTORY,
-  type RoomSocket,
-  type RoomSocketFactory,
-} from './room-socket.js';
+export { type ConnectivityEvents, type RoomSocket, type RoomSocketFactory } from './room-socket.js';

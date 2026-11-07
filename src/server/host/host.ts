@@ -2,7 +2,7 @@ import { PLATFORM_CLOCK } from '../../protocol/clock.js';
 import type { RoomHost, RoomLogger } from './adapters.js';
 
 /** A {@link RoomHost} with every optional adapter filled in. */
-export type ResolvedRoomHost = Required<{ [Key in keyof RoomHost]: NonNullable<RoomHost[Key]> }>;
+export type ResolvedRoomHost = { [Key in keyof RoomHost]-?: NonNullable<RoomHost[Key]> };
 
 /** A logger that drops every message. */
 export const SILENT_LOGGER: RoomLogger = Object.freeze({

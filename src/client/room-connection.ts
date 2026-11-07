@@ -1,31 +1,16 @@
-import { type Awareness, removeAwarenessStates } from '@y/protocols/awareness';
-import type { Doc } from '@y/y';
-import type { RoomClock, RoomTimer } from '../protocol/clock.js';
+import { removeAwarenessStates } from '@y/protocols/awareness';
+import type { RoomTimer } from '../protocol/clock.js';
 import type { AuthMessage } from '../protocol/messages.js';
-import { buildRoomUrl } from '../protocol/room-url.js';
 import { type ConnectionStateStore, reportListenerError } from './connection-state.js';
 import { encodeSyncUpdate } from './frames.js';
-import type { RoomSocketFactory } from './room-socket.js';
-import { openSocketSession, type SocketSession } from './socket-session.js';
+import { openSocketSession, type SocketConfig, type SocketSession } from './socket-session.js';
 import type { UnconfirmedUpdates } from './unconfirmed-updates.js';
 
-/** How often the stale-socket check runs. */
-const CHECK_CADENCE_MS = 4_000;
-
 /** Everything a provider's connection reads and changes, shared by its handlers. */
-export interface RoomConnection {
-  readonly endpoint: string;
-  readonly room: string;
-  readonly doc: Doc;
-  readonly awareness: Awareness;
-  /** The transaction origin of everything the server sends. */
-  readonly origin: object;
-  readonly clock: RoomClock;
-  readonly createSocket: RoomSocketFactory;
-  readonly getToken: () => string | null;
-  readonly params: Readonly<Record<string, string>>;
+export interface RoomConnection extends SocketConfig {
+  /** The URL for the next attempt, with a fresh token. */
+  readonly url: () => string;
   readonly maxBackoffMs: number;
-  readonly socketTimeoutMs: number;
   readonly store: ConnectionStateStore;
   readonly unconfirmed: UnconfirmedUpdates;
   readonly statelessListeners: Set<(payload: string) => void>;
@@ -97,20 +82,7 @@ export function openSession(connection: RoomConnection): void {
   connection.reconnectTimer = null;
   if (connection.session || !canConnect(connection)) return;
   connection.store.update({ status: 'connecting' });
-  connection.session = openSocketSession({
-    url: buildRoomUrl({
-      endpoint: connection.endpoint,
-      room: connection.room,
-      token: connection.getToken(),
-      params: connection.params,
-    }),
-    createSocket: connection.createSocket,
-    clock: connection.clock,
-    doc: connection.doc,
-    awareness: connection.awareness,
-    origin: connection.origin,
-    socketTimeoutMs: connection.socketTimeoutMs,
-    checkCadenceMs: CHECK_CADENCE_MS,
+  connection.session = openSocketSession(connection.url(), connection, {
     onOpen: () => connection.store.update({ status: 'connected', refusal: null }),
     onRemoteUpdate: (update, isSyncStep2) => handleRemoteUpdate(connection, update, isSyncStep2),
     onAuth: (message) => handleAuth(connection, message),
@@ -120,7 +92,7 @@ export function openSession(connection: RoomConnection): void {
 }
 
 /** Schedules the next attempt with exponential backoff: 0 ms after an open socket closed. */
-export function scheduleReconnect(connection: RoomConnection): void {
+function scheduleReconnect(connection: RoomConnection): void {
   if (!canConnect(connection) || connection.reconnectTimer !== null) return;
   const { failedAttempts } = connection;
   const delay =

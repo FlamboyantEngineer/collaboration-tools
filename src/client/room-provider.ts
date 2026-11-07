@@ -2,6 +2,7 @@ import { Awareness } from '@y/protocols/awareness';
 import type { Doc } from '@y/y';
 import { PLATFORM_CLOCK, type RoomClock } from '../protocol/clock.js';
 import { encodeStatelessMessage } from '../protocol/messages.js';
+import { buildRoomUrl } from '../protocol/room-url.js';
 import {
   createConnectionStateStore,
   type RoomConnectionListener,
@@ -68,15 +69,18 @@ const DEFAULT_SOCKET_TIMEOUT_MS = 45_000;
 
 function createConnection(options: RoomProviderOptions): RoomConnection {
   return {
-    endpoint: options.endpoint,
-    room: options.room,
+    url: () =>
+      buildRoomUrl({
+        endpoint: options.endpoint,
+        room: options.room,
+        token: options.getToken?.() ?? null,
+        params: options.params,
+      }),
     doc: options.doc,
     awareness: options.awareness ?? new Awareness(options.doc),
     origin: Object.freeze({ room: options.room }),
     clock: options.clock ?? PLATFORM_CLOCK,
     createSocket: options.createSocket ?? PLATFORM_SOCKET_FACTORY,
-    getToken: options.getToken ?? (() => null),
-    params: options.params ?? {},
     maxBackoffMs: options.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS,
     socketTimeoutMs: options.socketTimeoutMs ?? DEFAULT_SOCKET_TIMEOUT_MS,
     store: createConnectionStateStore(),
