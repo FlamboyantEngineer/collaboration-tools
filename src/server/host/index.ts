@@ -3,13 +3,18 @@ export type {
   RoomAdmission,
   RoomAdmissionRequest,
   RoomAuth,
+  RoomGenerationReason,
   RoomHost,
+  RoomLoadOutcome,
   RoomLoadResult,
   RoomLogger,
+  RoomMetricEvent,
+  RoomMetrics,
   RoomPermissions,
   RoomPersistence,
   RoomRefreshRequest,
   RoomRefusal,
+  RoomSeeds,
   RoomStoreInput,
   RoomStoreResult,
   RoomWriteChange,
@@ -17,7 +22,14 @@ export type {
   StoredRoomState,
   StoredRoomVersion,
 } from './adapters.js';
-export { NO_PERMISSIONS, type ResolvedRoomHost, resolveRoomHost, SILENT_LOGGER } from './host.js';
+export {
+  EMPTY_SEEDS,
+  NO_METRICS,
+  NO_PERMISSIONS,
+  type ResolvedRoomHost,
+  resolveRoomHost,
+  SILENT_LOGGER,
+} from './host.js';
 export {
   createMemoryPersistence,
   type MemoryPersistence,

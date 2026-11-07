@@ -1,4 +1,4 @@
-import type { RoomAccess } from '../protocol/messages.js';
+import type { RoomAccess, RoomSaveStatus } from '../protocol/messages.js';
 
 export type RoomConnectionStatus = 'connecting' | 'connected' | 'disconnected';
 
@@ -19,6 +19,8 @@ export interface RoomConnectionState {
   refusal: string | null;
   /** The close code of the last socket that closed, or `null`. */
   closeCode: number | null;
+  /** Whether the room has stored its changes, as the server last said on this socket, or `null`. */
+  saveStatus: RoomSaveStatus | null;
 }
 
 export type RoomConnectionListener = (state: RoomConnectionState) => void;
@@ -38,20 +40,33 @@ const INITIAL_STATE: RoomConnectionState = Object.freeze({
   hasUnconfirmedChanges: false,
   refusal: null,
   closeCode: null,
+  saveStatus: null,
 });
 
+/** Where a provider reports errors it catches. */
+export interface RoomClientLogger {
+  error(message: string, details?: Readonly<Record<string, unknown>>): void;
+}
+
+/** Reports an error the provider caught without stopping its message handling. */
+export type ErrorReporter = (message: string, error: unknown) => void;
+
 /**
- * Reports a listener's error the way the platform reports an event listener's, without stopping the
- * provider's message handling.
+ * Reports to `logger`, or, without one, the way the platform reports an event listener's error:
+ * rethrown in a microtask.
  */
-export function reportListenerError(error: unknown): void {
-  queueMicrotask(() => {
-    throw error;
-  });
+export function createErrorReporter(logger: RoomClientLogger | undefined): ErrorReporter {
+  if (logger) return (message, error) => logger.error(message, { error });
+  return (_message, error) =>
+    queueMicrotask(() => {
+      throw error;
+    });
 }
 
 /** Creates the store behind a provider's {@link RoomConnectionState}. */
-export function createConnectionStateStore(): ConnectionStateStore {
+export function createConnectionStateStore(
+  report: ErrorReporter = createErrorReporter(undefined),
+): ConnectionStateStore {
   let state = INITIAL_STATE;
   const listeners = new Set<RoomConnectionListener>();
 
@@ -63,7 +78,7 @@ export function createConnectionStateStore(): ConnectionStateStore {
       try {
         listener(state);
       } catch (error) {
-        reportListenerError(error);
+        report('A connection state listener threw.', error);
       }
     }
   };

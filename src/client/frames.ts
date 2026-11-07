@@ -9,6 +9,8 @@ import {
   MESSAGE_TYPES,
   readAuthMessage,
   readStatelessMessage,
+  readStorageMessage,
+  type StorageMessage,
 } from '../protocol/messages.js';
 
 /** What reading a server frame needs from the provider. */
@@ -20,6 +22,7 @@ export interface FrameContext {
   onRemoteUpdate(update: Uint8Array, isSyncStep2: boolean): void;
   onAuth(message: AuthMessage): void;
   onStateless(payload: string): void;
+  onStorage(message: StorageMessage): void;
 }
 
 function readSync(decoder: decoding.Decoder, reply: encoding.Encoder, context: FrameContext) {
@@ -62,7 +65,10 @@ export function readServerFrame(
       const message = readAuthMessage(decoder);
       if (message) context.onAuth(message);
     } else if (type === MESSAGE_TYPES.stateless) context.onStateless(readStatelessMessage(decoder));
-    else break;
+    else if (type === MESSAGE_TYPES.storage) {
+      const message = readStorageMessage(decoder);
+      if (message) context.onStorage(message);
+    } else break;
   }
   return encoding.length(reply) > 0 ? encoding.toUint8Array(reply) : null;
 }

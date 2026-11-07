@@ -1,5 +1,5 @@
 import { PLATFORM_CLOCK } from '../../protocol/clock.js';
-import type { RoomHost, RoomLogger, RoomPermissions } from './adapters.js';
+import type { RoomHost, RoomLogger, RoomMetrics, RoomPermissions, RoomSeeds } from './adapters.js';
 
 /** A {@link RoomHost} with every optional adapter filled in. */
 export type ResolvedRoomHost = { [Key in keyof RoomHost]-?: NonNullable<RoomHost[Key]> };
@@ -13,12 +13,20 @@ export const SILENT_LOGGER: RoomLogger = Object.freeze({
 /** Permissions that give no room any rules. */
 export const NO_PERMISSIONS: RoomPermissions = Object.freeze({ rulesFor: () => null });
 
+/** Seeds that start every room empty. */
+export const EMPTY_SEEDS: RoomSeeds = Object.freeze({ seed: () => Promise.resolve(null) });
+
+/** Metrics that record nothing. */
+export const NO_METRICS: RoomMetrics = Object.freeze({ record: () => undefined });
+
 /** Fills in the adapters a host left out with their defaults. */
 export function resolveRoomHost(host: RoomHost): ResolvedRoomHost {
   return {
     auth: host.auth,
     persistence: host.persistence,
     permissions: host.permissions ?? NO_PERMISSIONS,
+    seeds: host.seeds ?? EMPTY_SEEDS,
+    metrics: host.metrics ?? NO_METRICS,
     logger: host.logger ?? SILENT_LOGGER,
     clock: host.clock ?? PLATFORM_CLOCK,
   };

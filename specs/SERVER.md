@@ -82,16 +82,16 @@ Verification: `src/server/awareness-owners.test.ts`
 
 ### COLLAB-SERVER-4.1 - Loading
 
-A room shall load through `host.persistence.load`. A `found` state shall rebuild the document, and the next store shall build on its revision. A `missing` room shall start empty with no base revision. A `corrupt` state, or a found state whose update cannot be applied, shall be logged and start empty, storing over the unreadable state's revision. An `unavailable` load, or a load that throws, shall fail the join (COLLAB-SERVER-1.3).
+A room shall load through `host.persistence.load`. A `found` state shall rebuild the document, and the next store shall build on its revision. A `missing` room shall start from its seed (COLLAB-SERVER-8.2) with no base revision. A `corrupt` state, or a found state whose update cannot be applied, shall be logged and start from its seed, storing over the unreadable state's revision. An `unavailable` load, or a load that throws, shall fail the join (COLLAB-SERVER-1.3).
 
-Implementation: `src/server/live-room.ts`
+Implementation: `src/server/live-room.ts`, `src/server/stored-room.ts`
 Verification: `src/server/room-storage.test.ts`
 
 ### COLLAB-SERVER-4.2 - Store scheduling
 
-A change shall be stored `storeDebounceMs` (default 2000) after the last change, but no later than `storeMaxDebounceMs` (default 10000) after the first unstored one, one store at a time, as a full-state update with `baseRevision` set to the last stored revision. A store that resolves `unavailable` or throws shall be retried after `storeRetryMs` (default 1000), doubling up to 30000 ms.
+A change shall be stored `storeDebounceMs` (default 2000) after the last change, but no later than `storeMaxDebounceMs` (default 10000) after the first unstored one, one store at a time, as a full-state update with `baseRevision` set to the last stored revision. A store that resolves `unavailable` or throws shall be retried after `storeRetryMs` (default 1000), doubling up to 30000 ms; a change made while a retry waits shall wait for it, not start a debounce of its own.
 
-Implementation: `src/server/store-scheduler.ts`, `src/server/live-room.ts`, `src/server/room-server.ts`
+Implementation: `src/server/store-scheduler.ts`, `src/server/live-room.ts`, `src/server/stored-room.ts`, `src/server/room-server.ts`
 Verification: `src/server/store-scheduler.test.ts`
 
 ### COLLAB-SERVER-4.3 - Unloading
@@ -158,21 +158,21 @@ Verification: `src/server/websocket-attachment.test.ts`
 
 ### COLLAB-SERVER-7.1 - Reading an update's changes
 
-Before applying a read-write connection's update to a room with write rules, the server shall read, without applying the update or copying the room, every top-level type the update changes and the keys directly under that type whose content it changes, a position in a list or text counting as `null`. A change deep inside a nested type counts under the top-level key that holds it. Content the room holds already and content Yjs would drop count as no change.
+Before applying a read-write connection's update, the server shall read, without applying the update or copying the room, every top-level type the update changes and the keys directly under that type whose content it changes, a position in a list or text counting as `null`. A change deep inside a nested type counts under the top-level key that holds it. Content the room holds already and content Yjs would drop count as no change.
 
 Implementation: `src/server/update-changes.ts`
 Verification: `src/server/update-changes.test.ts`
 
 ### COLLAB-SERVER-7.2 - Write rules
 
-`host.permissions.rulesFor(room)` shall give a room its `RoomWriteRules` when it loads. A changed top-level type in `serverOnly` shall refuse the update; otherwise the type shall need the capability `required` names for it, or `otherwise` when it is not named, or nothing beyond read-write access. When the lists allow the change, the rules' `check(change)` shall decide, with the room, actor, capabilities and changes; `change.simulate(inspect)` shall run `inspect` on a copy of the room with a function that applies the update to it. A `check` that throws shall refuse. A refused update shall not be applied: the server shall log it, send an auth denied message with `unauthorized-write` and close the socket with `CLOSE_CODES.forbidden`. The host's room handles are not checked.
+`host.permissions.rulesFor(room)` shall give a room its `RoomWriteRules` when it loads. A changed top-level type in `serverOnly`, or the room metadata type (COLLAB-PROTOCOL-3.1) in every room, shall refuse the update; otherwise the type shall need the capability `required` names for it, or `otherwise` when it is not named, or nothing beyond read-write access. When the lists allow the change, the rules' `check(change)` shall decide, with the room, actor, capabilities and changes; `change.simulate(inspect)` shall run `inspect` on a copy of the room with a function that applies the update to it. A `check` that throws shall refuse. A refused update shall not be applied: the server shall log it, send an auth denied message with `unauthorized-write` and close the socket with `CLOSE_CODES.forbidden`. The host's room handles are not checked.
 
 Implementation: `src/server/write-rules.ts`, `src/server/member-frames.ts`, `src/server/server-connection.ts`, `src/server/live-room.ts`, `src/server/host/adapters.ts`, `src/server/host/host.ts`
 Verification: `src/server/authorization.test.ts`, `src/server/host/host.test.ts`
 
 ### COLLAB-SERVER-7.3 - Incomplete updates
 
-In a room with write rules, an update that builds on content the room lacks shall not be applied or held back, since it would later apply unchecked; the server shall answer it with a sync step 1, so the client sends everything the room lacks.
+An update that builds on content the room lacks shall not be applied or held back, since it would later apply unchecked; the server shall answer it with a sync step 1, so the client sends everything the room lacks.
 
 Implementation: `src/server/update-changes.ts`, `src/server/member-frames.ts`
 Verification: `src/server/update-changes.test.ts`, `src/server/authorization.test.ts`
@@ -183,3 +183,40 @@ When admission gives an `expiresAt`, the server shall call `host.auth.refresh` w
 
 Implementation: `src/server/reauthorization.ts`, `src/server/server-connection.ts`
 Verification: `src/server/authorization.test.ts`
+
+## COLLAB-SERVER-8 - Durability
+
+### COLLAB-SERVER-8.1 - Generations
+
+A room that loads from its seed shall start a new generation (COLLAB-PROTOCOL-3.1), a random UUID, and a found state without a generation shall be given one, keeping its content. A room with a new generation shall store it before any member joins; when that store does not succeed, the load shall fail (COLLAB-SERVER-1.3). A connection whose URL names a generation other than the room's shall be refused with an auth denied message with `generation-mismatch` and closed with `CLOSE_CODES.gone`, since its document holds history the room discarded. A connection that names none has never synced and may join.
+
+Implementation: `src/server/stored-room.ts`, `src/server/live-room.ts`, `src/server/server-connection.ts`, `src/server/write-rules.ts`
+Verification: `src/server/durability.test.ts`
+
+### COLLAB-SERVER-8.2 - Seeds and stale rooms
+
+A room that is `missing`, `corrupt` or `stale` shall start from `host.seeds.seed(room)`, a Yjs update that builds its content, or empty when the seed is `null`, and a `corrupt` or `stale` one shall store over the revision of the state it replaces. A seed that throws, or cannot be applied, shall fail the load.
+
+Implementation: `src/server/stored-room.ts`, `src/server/host/adapters.ts`, `src/server/host/host.ts`
+Verification: `src/server/durability.test.ts`
+
+### COLLAB-SERVER-8.3 - Save status
+
+The server shall send each member the room's save status (COLLAB-PROTOCOL-1.5) when it joins, after its auth message, and every member each change of it: `saved` when every change is stored, `unsaved` while changes wait for a store, `saving` while one runs and `retrying` while a failed one waits to be retried.
+
+Implementation: `src/server/store-scheduler.ts`, `src/server/live-room.ts`, `src/server/member-frames.ts`
+Verification: `src/server/durability.test.ts`, `src/server/store-scheduler.test.ts`
+
+### COLLAB-SERVER-8.4 - Receipts
+
+The server shall answer a member's receipt request with a receipt for the same id once the room has stored every change made before the request, at once when nothing is waiting. A room that cannot store them, because another writer stored it first or it unloads, closes its members instead of answering.
+
+Implementation: `src/server/store-scheduler.ts`, `src/server/member-frames.ts`
+Verification: `src/server/durability.test.ts`, `src/server/store-scheduler.test.ts`
+
+### COLLAB-SERVER-8.5 - Metrics
+
+The server shall pass `host.metrics.record` an event for each load, with its outcome and duration, each store, with its outcome, duration and size, and each new generation, with the load outcome that caused it (`unmarked` for a found state without one). A recorder that throws shall change nothing.
+
+Implementation: `src/server/stored-room.ts`, `src/server/live-room.ts`, `src/server/host/adapters.ts`
+Verification: `src/server/durability.test.ts`

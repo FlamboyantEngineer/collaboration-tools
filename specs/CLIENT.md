@@ -13,7 +13,7 @@ Verification: `src/client/room-provider.test.ts`
 
 ### COLLAB-CLIENT-1.2 - Sync handshake and connection state
 
-The provider shall connect at once unless `connect` is `false`. On open it shall send a sync step 1 and, when it has one, its local awareness state; it shall answer the server's sync step 1 and apply the server's sync step 2 and updates with an origin of its own. `getState()` shall return the connection state: `status` (`connecting`, `connected` or `disconnected`), `access` (`pending` until the server grants access on the current socket, then `read-write` or `read-only`), `synced` (whether the current socket has received the server's sync step 2), `syncCount` (completed handshakes since creation), `hasUnconfirmedChanges`, `refusal` and `closeCode` (the close code of the last socket that closed, `null` when the provider closed it). A provider that has not connected shall report `disconnected`, `pending`, not synced and zero handshakes.
+The provider shall connect at once unless `connect` is `false`. On open it shall send a sync step 1 and, when it has one, its local awareness state; it shall answer the server's sync step 1 and apply the server's sync step 2 and updates with an origin of its own. `getState()` shall return the connection state: `status` (`connecting`, `connected` or `disconnected`), `access` (`pending` until the server grants access on the current socket, then `read-write` or `read-only`), `synced` (whether the current socket has received the server's sync step 2), `syncCount` (completed handshakes since creation), `hasUnconfirmedChanges`, `refusal`, `closeCode` (the close code of the last socket that closed, `null` when the provider closed it) and `saveStatus` (COLLAB-CLIENT-5.2). A provider that has not connected shall report `disconnected`, `pending`, not synced and zero handshakes.
 
 Implementation: `src/client/room-provider.ts`, `src/client/room-connection.ts`, `src/client/socket-session.ts`, `src/client/frames.ts`, `src/client/connection-state.ts`
 Verification: `src/client/room-provider.test.ts`
@@ -34,7 +34,7 @@ Verification: `src/client/room-provider.test.ts`
 
 ### COLLAB-CLIENT-1.5 - Subscribing
 
-`subscribe(listener)` shall call the listener with the new state each time a field changes, and return a function that stops it. A listener that throws shall not stop the provider; its error is rethrown in a microtask.
+`subscribe(listener)` shall call the listener with the new state each time a field changes, and return a function that stops it. A listener that throws shall not stop the provider; its error goes to the provider's logger (COLLAB-CLIENT-5.4).
 
 Implementation: `src/client/connection-state.ts`, `src/client/room-provider.ts`
 Verification: `src/client/room-provider.test.ts`, `src/client/connection-state.test.ts`
@@ -107,3 +107,33 @@ Verification: `src/client/room-provider.test.ts`
 
 Implementation: `src/client/room-provider.ts`
 Verification: `src/client/room-provider.test.ts`
+
+## COLLAB-CLIENT-5 - Durability
+
+### COLLAB-CLIENT-5.1 - Generations
+
+Each connection attempt shall name the generation the document holds (`readRoomGeneration`, COLLAB-PROTOCOL-3.1) in the room URL, or none for a document that has not synced. When the server refuses it with `generation-mismatch`, the provider stops as for any refusal; the host then opens the room again with a new document.
+
+Implementation: `src/client/room-provider.ts`
+Verification: `src/server/durability.test.ts`
+
+### COLLAB-CLIENT-5.2 - Save status
+
+`saveStatus` shall be the room's save status as the server last sent it on the current socket, and `null` before it has and after the socket closes.
+
+Implementation: `src/client/room-connection.ts`, `src/client/frames.ts`, `src/client/connection-state.ts`
+Verification: `src/server/durability.test.ts`
+
+### COLLAB-CLIENT-5.3 - Waiting until stored
+
+`whenStored()` shall resolve `true` once the room has stored every local change made before the call. It shall send its receipt request once the current socket has synced and sent what an earlier socket lost, sending it again on the next socket when one closes first, and resolve `false` when the provider is refused or destroyed first. A read-only connection's changes never reach the room, so its receipt covers only the room's own changes.
+
+Implementation: `src/client/store-receipts.ts`, `src/client/room-connection.ts`, `src/client/room-provider.ts`
+Verification: `src/server/durability.test.ts`
+
+### COLLAB-CLIENT-5.4 - Logger
+
+With `options.logger`, the errors the provider catches, from a listener that throws or a frame it cannot handle, shall go to `logger.error` with the error in its details. Without one, each shall be rethrown in a microtask, as the platform reports an event listener's error.
+
+Implementation: `src/client/connection-state.ts`, `src/client/socket-session.ts`, `src/client/room-connection.ts`, `src/client/room-provider.ts`
+Verification: `src/client/connection-state.test.ts`

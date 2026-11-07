@@ -1,11 +1,18 @@
 /** The query parameter that carries the client's token. */
 export const TOKEN_PARAM = 'token';
 
+/** The query parameter that carries the generation of the client's document (COLLAB-PROTOCOL-3). */
+export const GENERATION_PARAM = 'generation';
+
+const RESERVED_PARAMS: ReadonlySet<string> = new Set([TOKEN_PARAM, GENERATION_PARAM]);
+
 export interface RoomUrlParts {
   /** The room, as the client named it. */
   room: string;
   /** The token the client sent, or `null`. */
   token: string | null;
+  /** The generation of the client's document, or `null` for a document that has none. */
+  generation: string | null;
   /** Every other query parameter. */
   params: Readonly<Record<string, string>>;
 }
@@ -15,25 +22,27 @@ export interface BuildRoomUrlOptions {
   endpoint: string;
   room: string;
   token?: string | null | undefined;
+  generation?: string | null | undefined;
   params?: Readonly<Record<string, string>> | undefined;
 }
 
 /**
  * The URL a client opens for a room: the endpoint, then the room as one encoded path segment, then
- * the endpoint's query, the caller's parameters and the token.
+ * the endpoint's query, the caller's parameters, the generation and the token.
  */
 export function buildRoomUrl(options: BuildRoomUrlOptions): string {
   const url = new URL(options.endpoint);
   url.pathname = `${url.pathname.replace(/\/+$/, '')}/${encodeURIComponent(options.room)}`;
   for (const [key, value] of Object.entries(options.params ?? {})) {
-    if (key !== TOKEN_PARAM) url.searchParams.set(key, value);
+    if (!RESERVED_PARAMS.has(key)) url.searchParams.set(key, value);
   }
+  if (options.generation) url.searchParams.set(GENERATION_PARAM, options.generation);
   if (options.token) url.searchParams.set(TOKEN_PARAM, options.token);
   return url.toString();
 }
 
 /**
- * Reads the room, token and parameters from a request path such as `/rooms/a%2Fb?token=t`, where
+ * Reads the room, token, generation and parameters from a request path such as `/rooms/a%2Fb?token=t`, where
  * the room is the last path segment. Returns `null` when the path names no room.
  */
 export function parseRoomUrl(path: string): RoomUrlParts | null {
@@ -48,7 +57,13 @@ export function parseRoomUrl(path: string): RoomUrlParts | null {
   if (!room) return null;
   const params: Record<string, string> = {};
   url.searchParams.forEach((value, key) => {
-    if (key !== TOKEN_PARAM) params[key] = value;
+    if (!RESERVED_PARAMS.has(key)) params[key] = value;
   });
-  return { room, token: url.searchParams.get(TOKEN_PARAM), params };
+  const { searchParams } = url;
+  return {
+    room,
+    token: searchParams.get(TOKEN_PARAM),
+    generation: searchParams.get(GENERATION_PARAM) || null,
+    params,
+  };
 }

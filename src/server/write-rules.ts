@@ -1,4 +1,5 @@
 import { applyUpdate, Doc, encodeStateAsUpdate } from '@y/y';
+import { ROOM_META_TYPE } from '../protocol/room-meta.js';
 import type { RoomActor, RoomWriteChange, RoomWriteRules } from './host/adapters.js';
 import { analyzeUpdate } from './update-changes.js';
 
@@ -19,7 +20,8 @@ export type WriteDecision =
   { verdict: 'allowed' } | { verdict: 'refused'; types: string[] } | { verdict: 'incomplete' };
 
 function mayChange(rules: RoomWriteRules, type: string, capabilities: ReadonlySet<string>) {
-  if (rules.serverOnly?.includes(type)) return false;
+  // The library's own metadata is server-only in every room.
+  if (type === ROOM_META_TYPE || rules.serverOnly?.includes(type)) return false;
   const needed = rules.required?.[type] ?? rules.otherwise;
   return needed === undefined || capabilities.has(needed);
 }

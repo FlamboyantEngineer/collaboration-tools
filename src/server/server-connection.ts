@@ -1,4 +1,5 @@
 import { CLOSE_CODES, encodeAuthMessage, encodeStatelessMessage } from '../protocol/messages.js';
+import { readRoomGeneration } from '../protocol/room-meta.js';
 import { parseRoomUrl } from '../protocol/room-url.js';
 import type {
   RoomActor,
@@ -173,7 +174,7 @@ async function join(connection: Connection, request: RoomServerRequest) {
   const { host, registry } = connection.dependencies;
   const parts = parseRoomUrl(request.url);
   if (!parts) return close(connection, CLOSE_CODES.badRequest, 'bad-request');
-  const { room: requested, token, params } = parts;
+  const { room: requested, token, generation, params } = parts;
   const admission = await host.auth.admit({
     room: requested,
     token,
@@ -192,6 +193,12 @@ async function join(connection: Connection, request: RoomServerRequest) {
     return close(connection, CLOSE_CODES.unavailable, 'unavailable');
   }
   if (connection.closed) return registry.release(load.room);
+  // A document from another generation would bring back what the room discarded when it started
+  // over; a client without a generation has never synced and may join any.
+  if (generation !== null && generation !== readRoomGeneration(load.room.doc)) {
+    registry.release(load.room);
+    return refuse(connection, 'generation-mismatch', CLOSE_CODES.gone);
+  }
   enter(connection, load.room, admission);
   if (admission.expiresAt !== undefined) {
     const refresh = { room: name, token, params, headers: request.headers, actor: admission.actor };

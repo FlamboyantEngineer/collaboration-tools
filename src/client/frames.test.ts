@@ -14,6 +14,7 @@ function context(doc = new Doc()): FrameContext {
     onRemoteUpdate: vi.fn(),
     onAuth: vi.fn(),
     onStateless: vi.fn(),
+    onStorage: vi.fn(),
   };
 }
 

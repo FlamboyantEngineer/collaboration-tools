@@ -13,8 +13,10 @@ import * as encoding from 'lib0/encoding';
 import { encodeAwarenessFrame, encodeSyncStep1, encodeSyncUpdate } from '../protocol/frames.js';
 import {
   encodeAuthMessage,
+  encodeStorageMessage,
   MESSAGE_TYPES,
   readStatelessMessage,
+  readStorageMessage,
   type RoomAccess,
 } from '../protocol/messages.js';
 import { decodeAwarenessEntries, encodeAwarenessEntries } from './awareness-owners.js';
@@ -46,19 +48,17 @@ function isEmptyIds(ids: ContentIds): boolean {
  */
 function applyMemberUpdate(context: MemberContext, update: Uint8Array) {
   const { room, member } = context;
-  if (room.rules) {
-    const decision = checkWrite(room.rules, {
-      room: room.name,
-      doc: room.doc,
-      actor: context.actor,
-      capabilities: context.capabilities,
-      update,
-    });
-    // An incomplete update is dropped, never held back unchecked: the sync step 1 asks the client
-    // for everything the room lacks, its dependencies included.
-    if (decision.verdict === 'incomplete') return member.send(encodeSyncStep1(room.doc));
-    if (decision.verdict === 'refused') return context.onRefusedWrite(decision.types);
-  }
+  const decision = checkWrite(room.rules, {
+    room: room.name,
+    doc: room.doc,
+    actor: context.actor,
+    capabilities: context.capabilities,
+    update,
+  });
+  // An incomplete update is dropped, never held back unchecked: the sync step 1 asks the client
+  // for everything the room lacks, its dependencies included.
+  if (decision.verdict === 'incomplete') return member.send(encodeSyncStep1(room.doc));
+  if (decision.verdict === 'refused') return context.onRefusedWrite(decision.types);
   let applied: Uint8Array | null = null;
   const watch = (change: Uint8Array) => (applied = change);
   room.doc.on('update', watch);
@@ -102,6 +102,17 @@ function readAwareness(decoder: decoding.Decoder, { room, member }: MemberContex
   room.broadcast(encodeAwarenessFrame(filtered), member);
 }
 
+/**
+ * Answers a receipt request once the room has stored every change made before it, which includes
+ * everything the member sent before it. A room that never stores them closes its members instead.
+ */
+function readStorage(decoder: decoding.Decoder, { room, member }: MemberContext) {
+  const message = readStorageMessage(decoder);
+  if (message?.type !== 'receipt-request') return;
+  const receipt = encodeStorageMessage({ type: 'receipt', id: message.id });
+  void room.store.whenStored().then((stored) => stored && member.send(receipt));
+}
+
 function sendAllAwareness({ room, member }: MemberContext) {
   const clients = [...room.awareness.getStates().keys()];
   if (clients.length > 0) {
@@ -121,13 +132,19 @@ export function readMemberFrame(frame: Uint8Array, context: MemberContext): void
     else if (type === MESSAGE_TYPES.awareness) readAwareness(decoder, context);
     else if (type === MESSAGE_TYPES.queryAwareness) sendAllAwareness(context);
     else if (type === MESSAGE_TYPES.stateless) context.onStateless(readStatelessMessage(decoder));
+    else if (type === MESSAGE_TYPES.storage) readStorage(decoder, context);
     else break;
   }
 }
 
-/** What a member gets once admitted: its access, the room's sync step 1 and every presence. */
+/**
+ * What a member gets once admitted: its access, the room's save status, its sync step 1 and every
+ * presence.
+ */
 export function sendWelcome(context: MemberContext): void {
-  context.member.send(encodeAuthMessage({ type: 'granted', access: context.access }));
-  context.member.send(encodeSyncStep1(context.room.doc));
+  const { member, room } = context;
+  member.send(encodeAuthMessage({ type: 'granted', access: context.access }));
+  member.send(encodeStorageMessage({ type: 'status', status: room.store.status() }));
+  member.send(encodeSyncStep1(room.doc));
   sendAllAwareness(context);
 }

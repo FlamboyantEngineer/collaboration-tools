@@ -4,6 +4,7 @@ import { createManualClock } from '../../test/manual-clock.js';
 import { connectToServer, settle } from '../../test/server-sockets.js';
 import { createRoomProvider, type RoomProvider } from '../client/room-provider.js';
 import { CLOSE_CODES } from '../protocol/messages.js';
+import { GENERATION_KEY, ROOM_META_TYPE } from '../protocol/room-meta.js';
 import type { RoomLoadResult, RoomPersistence, RoomStoreResult } from './host/adapters.js';
 import { createMemoryPersistence } from './host/memory-persistence.js';
 import { createRoomServer, type RoomServer } from './room-server.js';
@@ -11,8 +12,10 @@ import { createRoomServer, type RoomServer } from './room-server.js';
 const providers: RoomProvider[] = [];
 const servers: RoomServer[] = [];
 
+/** A stored state of a room in generation `g1`. */
 function update(content: string) {
   const doc = new Doc();
+  doc.get(ROOM_META_TYPE).setAttr(GENERATION_KEY, 'g1');
   doc.get('text').insert(0, content);
   return encodeStateAsUpdate(doc);
 }
@@ -104,7 +107,7 @@ describe('room storage', () => {
     expect(decoded(script.stored[0]?.update)).toBe('stored!');
   });
 
-  it('COLLAB-SERVER-4.1 starts a corrupt or undecodable room empty and stores over its revision', async () => {
+  it('COLLAB-SERVER-4.1 starts a corrupt or undecodable room from its seed and stores over its revision', async () => {
     const { persistence, script } = scriptedPersistence({
       status: 'found',
       state: { update: new Uint8Array([200, 1, 7]), revision: 'bad', sequence: 4 },
@@ -119,10 +122,11 @@ describe('room storage', () => {
     await settle();
 
     expect(logger.warn).toHaveBeenCalledWith(
-      'The stored room cannot be read; it starts empty.',
+      'The stored room cannot be read; it starts from its seed.',
       expect.objectContaining({ room: 'notes' }),
     );
-    expect(script.stored.map((entry) => entry.baseRevision)).toEqual(['bad']);
+    expect(script.stored[0]?.baseRevision).toBe('bad');
+    expect(decoded(script.stored.at(-1)?.update)).toBe('fresh');
   });
 
   it('COLLAB-SERVER-4.3 stores when the last member leaves, then unloads', async () => {
@@ -142,10 +146,10 @@ describe('room storage', () => {
 
   it('COLLAB-SERVER-4.3 keeps a room whose storage fails loaded, retrying, until it stores', async () => {
     const { persistence, script } = scriptedPersistence({ status: 'missing' });
-    script.storeResults.push({ status: 'unavailable', error: new Error('down') });
     const { server, clock, open } = serve(persistence);
     const member = open();
     await settle();
+    script.storeResults.push({ status: 'unavailable', error: new Error('down') });
 
     member.doc.get('text').insert(0, 'kept');
     await settle();
@@ -156,17 +160,18 @@ describe('room storage', () => {
     await settle();
 
     expect(loadedWhileFailing).toBe(1);
-    expect(script.stored).toHaveLength(2);
+    // The new room's generation, the failed store and its retry.
+    expect(script.stored).toHaveLength(3);
     expect(server.roomCount()).toBe(0);
   });
 
   it('COLLAB-SERVER-4.4 closes members on a store conflict, and a reconnect loads the other state', async () => {
     const { persistence, script } = scriptedPersistence({ status: 'missing' });
-    script.storeResults.push({ status: 'conflict', current: { revision: 'other', sequence: 2 } });
     const { server, clock, logger, sockets, open } = serve(persistence);
     const clientClock = createManualClock();
     const member = open(clientClock);
     await settle();
+    script.storeResults.push({ status: 'conflict', current: { revision: 'other', sequence: 2 } });
 
     member.doc.get('text').insert(0, 'mine');
     await settle();
@@ -174,9 +179,13 @@ describe('room storage', () => {
     await settle();
     const closedWith = sockets.sockets[0]?.serverClose;
     const roomsAfterConflict = server.roomCount();
+    // The other writer built on the same generation, which the room stored when it was new.
+    const theirs = new Doc();
+    applyUpdate(theirs, script.stored[0]?.update ?? new Uint8Array());
+    theirs.get('text').insert(0, 'theirs');
     script.load = {
       status: 'found',
-      state: { update: update('theirs'), revision: 'other', sequence: 2 },
+      state: { update: encodeStateAsUpdate(theirs), revision: 'other', sequence: 2 },
     };
     clientClock.advance(0);
     await settle();

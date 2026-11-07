@@ -1,10 +1,12 @@
 import { Awareness, encodeAwarenessUpdate, removeAwarenessStates } from '@y/protocols/awareness';
-import { applyUpdate, Doc, encodeStateAsUpdate } from '@y/y';
+import type { Doc } from '@y/y';
 import { encodeAwarenessFrame, encodeSyncUpdate } from '../protocol/frames.js';
+import { encodeStorageMessage } from '../protocol/messages.js';
 import { type AwarenessOwners, createAwarenessOwners } from './awareness-owners.js';
-import type { RoomLoadResult, RoomStoreResult, RoomWriteRules } from './host/adapters.js';
+import type { RoomWriteRules } from './host/adapters.js';
 import type { ResolvedRoomHost } from './host/host.js';
-import { createStoreScheduler, type StoreOutcome, type StoreScheduler } from './store-scheduler.js';
+import { createStoreScheduler, type StoreScheduler } from './store-scheduler.js';
+import { openStoredDoc, recordMetric, type RoomStoreContext, storeRoom } from './stored-room.js';
 
 /** What a room needs from each connection in it. */
 export interface RoomMember {
@@ -29,7 +31,7 @@ export interface LiveRoom {
   readonly owners: AwarenessOwners<RoomMember>;
   readonly store: StoreScheduler;
   /** The host's write rules for the room, read when it loaded. */
-  readonly rules: RoomWriteRules | null;
+  readonly rules: RoomWriteRules;
   /** Sends `frame` to every member except `except`. */
   broadcast(frame: Uint8Array<ArrayBuffer>, except?: RoomMember): void;
   /** Removes a member and its awareness states. */
@@ -47,42 +49,6 @@ export interface LoadRoomOptions {
   onConflict(room: LiveRoom): void;
 }
 
-interface RoomStoreContext {
-  name: string;
-  doc: Doc;
-  host: ResolvedRoomHost;
-  baseRevision: string | null;
-  conflicted: boolean;
-  onConflict(): void;
-}
-
-async function storeRoom(context: RoomStoreContext): Promise<StoreOutcome> {
-  const { host, name } = context;
-  if (context.conflicted) return 'abandoned';
-  let result: RoomStoreResult;
-  try {
-    result = await host.persistence.store({
-      room: name,
-      update: encodeStateAsUpdate(context.doc),
-      baseRevision: context.baseRevision,
-    });
-  } catch (error) {
-    result = { status: 'unavailable', error: toError(error) };
-  }
-  if (result.status === 'stored') {
-    context.baseRevision = result.revision;
-    return 'stored';
-  }
-  if (result.status === 'conflict') {
-    host.logger.error('Another writer stored the room first.', { room: name });
-    context.conflicted = true;
-    context.onConflict();
-    return 'abandoned';
-  }
-  host.logger.warn('Storing the room failed; retrying.', { room: name, error: result.error });
-  return 'retry';
-}
-
 function removeMember(room: LiveRoom, member: RoomMember) {
   if (!room.members.delete(member)) return;
   const released = room.owners.release(member);
@@ -93,50 +59,16 @@ function removeMember(room: LiveRoom, member: RoomMember) {
   }
 }
 
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
-/** The document a load result rebuilds, and the revision its next store builds on. */
-function openStoredDoc(name: string, loaded: RoomLoadResult, host: ResolvedRoomHost) {
-  if (loaded.status === 'found') {
-    const doc = new Doc();
-    try {
-      applyUpdate(doc, loaded.state.update);
-      return { doc, baseRevision: loaded.state.revision };
-    } catch (error) {
-      doc.destroy();
-      loaded = {
-        status: 'corrupt',
-        reason: toError(error).message,
-        version: { revision: loaded.state.revision, sequence: loaded.state.sequence },
-      };
-    }
-  }
-  if (loaded.status === 'corrupt') {
-    host.logger.warn('The stored room cannot be read; it starts empty.', {
-      room: name,
-      reason: loaded.reason,
-    });
-    return { doc: new Doc(), baseRevision: loaded.version.revision };
-  }
-  return { doc: new Doc(), baseRevision: null };
-}
-
 /**
- * Loads a room from the host's persistence. A missing room starts empty; a corrupt one starts
- * empty and stores over the unreadable state; an unavailable store fails the load.
+ * Loads a room from the host's persistence (COLLAB-SERVER-4.1, COLLAB-SERVER-8.1). A room that
+ * starts a new generation stores it before anyone joins, so a stored room never goes back to an
+ * older generation.
  */
 export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
   const { name, host, timing } = options;
-  let loaded: RoomLoadResult;
-  try {
-    loaded = await host.persistence.load(name);
-  } catch (error) {
-    loaded = { status: 'unavailable', error: toError(error) };
-  }
-  if (loaded.status === 'unavailable') return { ok: false, error: loaded.error };
-  const { doc, baseRevision } = openStoredDoc(name, loaded, host);
+  const load = await openStoredDoc(name, host);
+  if (!load.ok) return load;
+  const { doc, baseRevision, newGeneration } = load.opened;
   const awareness = new Awareness(doc);
   awareness.setLocalState(null);
   const context: RoomStoreContext = {
@@ -151,6 +83,7 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
     ...timing,
     clock: host.clock,
     store: () => storeRoom(context),
+    onStatus: (status) => room.broadcast(encodeStorageMessage({ type: 'status', status })),
   });
   const room: LiveRoom = {
     name,
@@ -159,7 +92,7 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
     members: new Set(),
     owners: createAwarenessOwners(),
     store,
-    rules: host.permissions.rulesFor(name),
+    rules: host.permissions.rulesFor(name) ?? {},
     broadcast: (frame, except) => room.members.forEach((m) => m !== except && m.send(frame)),
     leave: (member) => removeMember(room, member),
     destroy: () => {
@@ -168,6 +101,13 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
       doc.destroy();
     },
   };
+  if (newGeneration) {
+    recordMetric(host, { type: 'generation', room: name, reason: newGeneration });
+    if ((await storeRoom(context)) !== 'stored') {
+      room.destroy();
+      return { ok: false, error: new Error('The room could not store its new generation.') };
+    }
+  }
   // Every change, from a member or from the host, reaches every member, its sender included: the
   // echo is how a client learns the server holds its change.
   doc.on('update', (update: Uint8Array) => {

@@ -118,10 +118,18 @@ export type RoomLoadResult =
   | { status: 'found'; state: StoredRoomState }
   /** The room has never been stored: the library seeds it. */
   | { status: 'missing' }
-  /** The stored state cannot be read: the library starts the room empty and stores over `version`. */
+  /** The stored state cannot be read: the library seeds the room and stores over `version`. */
   | { status: 'corrupt'; reason: string; version: StoredRoomVersion }
+  /**
+   * The stored state is readable but out of date with the host's own record of the content, such
+   * as one changed outside any room: the library seeds the room and stores over `version`.
+   */
+  | { status: 'stale'; reason: string; version: StoredRoomVersion }
   /** Storage failed: the room does not open. */
   | { status: 'unavailable'; error: Error };
+
+/** How a load's outcome is named in metrics. */
+export type RoomLoadOutcome = RoomLoadResult['status'];
 
 export interface RoomStoreInput {
   room: string;
@@ -146,6 +154,36 @@ export interface RoomPersistence {
   store(input: RoomStoreInput): Promise<RoomStoreResult>;
 }
 
+/** What a room starts from when it starts over. */
+export interface RoomSeeds {
+  /**
+   * A Yjs update that builds the content of `room` from empty, or `null` to start it empty. It is
+   * read when a room is missing, corrupt or stale. A seed that throws fails the load.
+   */
+  seed(room: string): Promise<Uint8Array | null>;
+}
+
+/** Why a room started a new generation: the load outcome that made it start over. */
+export type RoomGenerationReason = 'missing' | 'corrupt' | 'stale' | 'unmarked';
+
+/** One event a host may count or time. Durations are in clock milliseconds. */
+export type RoomMetricEvent =
+  | { type: 'load'; room: string; outcome: RoomLoadOutcome; durationMs: number }
+  | {
+      type: 'store';
+      room: string;
+      outcome: RoomStoreResult['status'];
+      durationMs: number;
+      /** The size of the stored update. */
+      bytes: number;
+    }
+  | { type: 'generation'; room: string; reason: RoomGenerationReason };
+
+/** Receives what the library measures. A recorder that throws is ignored. */
+export interface RoomMetrics {
+  record(event: RoomMetricEvent): void;
+}
+
 /** Where the library reports what a host operator should see. */
 export interface RoomLogger {
   warn(message: string, details?: Readonly<Record<string, unknown>>): void;
@@ -158,6 +196,10 @@ export interface RoomHost {
   persistence: RoomPersistence;
   /** Defaults to no rules beyond each connection's access. */
   permissions?: RoomPermissions | undefined;
+  /** Defaults to starting every new room empty. */
+  seeds?: RoomSeeds | undefined;
+  /** Defaults to recording nothing. */
+  metrics?: RoomMetrics | undefined;
   /** Defaults to a logger that drops every message. */
   logger?: RoomLogger | undefined;
   /** Defaults to the platform clock. */

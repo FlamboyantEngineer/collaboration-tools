@@ -87,6 +87,7 @@ describe('createRoomProvider', () => {
       hasUnconfirmedChanges: false,
       refusal: null,
       closeCode: null,
+      saveStatus: null,
     });
   });
 

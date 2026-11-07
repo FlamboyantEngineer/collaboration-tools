@@ -2,8 +2,8 @@ import type { Awareness } from '@y/protocols/awareness';
 import type { Doc } from '@y/y';
 import type { RoomClock } from '../protocol/clock.js';
 import { encodeSyncStep1 } from '../protocol/frames.js';
-import type { AuthMessage } from '../protocol/messages.js';
-import { reportListenerError } from './connection-state.js';
+import type { AuthMessage, StorageMessage } from '../protocol/messages.js';
+import type { ErrorReporter } from './connection-state.js';
 import { readServerFrame } from './frames.js';
 import { frameBytes, type RoomSocket, type RoomSocketFactory } from './room-socket.js';
 import { createStaleSocketCheck } from './stale-socket-check.js';
@@ -17,6 +17,7 @@ export interface SocketConfig {
   /** The transaction origin of everything the server sends. */
   readonly origin: object;
   readonly socketTimeoutMs: number;
+  readonly report: ErrorReporter;
 }
 
 export interface SocketEvents {
@@ -24,6 +25,7 @@ export interface SocketEvents {
   onRemoteUpdate(update: Uint8Array, isSyncStep2: boolean): void;
   onAuth(message: AuthMessage): void;
   onStateless(payload: string): void;
+  onStorage(message: StorageMessage): void;
   /** Runs once, when the socket closes for any reason; `code` is `null` when the client closed it. */
   onClose(code: number | null): void;
 }
@@ -106,7 +108,7 @@ export function openSocketSession(
       const reply = readServerFrame(frame, frameContext);
       if (reply) send(reply);
     } catch (error) {
-      reportListenerError(error);
+      config.report('A frame from the server could not be handled.', error);
     }
   };
   socket.onclose = (event) => finish(event.code);
