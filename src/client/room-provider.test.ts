@@ -1,5 +1,5 @@
 import { Doc } from '@y/y';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createLoopbackServer, flush, type LoopbackServer } from '../../test/loopback-server.js';
 import { createManualClock } from '../../test/manual-clock.js';
 import type { RoomConnectionState } from './connection-state.js';
@@ -269,6 +269,29 @@ describe('createRoomProvider', () => {
     expect(seen).toEqual({ name: 'Ada' });
     expect(afterLeave).toBe(false);
     expect([...first.awareness.getStates().keys()]).toEqual([first.awareness.clientID]);
+  });
+
+  it('COLLAB-CLIENT-4.1 sends back none of the room’s awareness and renews its own clock on open', async () => {
+    const server = createLoopbackServer();
+    const clock = createManualClock();
+    const first = open(server, { clock });
+    const second = open(server);
+    await flush();
+    const secondSocket = server.sockets[1];
+    if (!secondSocket) throw new Error('no socket');
+    const sentBySecond = vi.spyOn(secondSocket, 'send');
+
+    first.awareness.setLocalStateField('name', 'Ada');
+    await flush();
+    const clockBefore = first.awareness.meta.get(first.awareness.clientID)?.clock ?? 0;
+    server.sockets[0]?.drop();
+    await flush();
+    clock.advance(0);
+    await flush();
+
+    expect(second.awareness.getStates().get(first.awareness.clientID)).toEqual({ name: 'Ada' });
+    expect(sentBySecond).not.toHaveBeenCalled();
+    expect(first.awareness.meta.get(first.awareness.clientID)?.clock).toBe(clockBefore + 1);
   });
 
   it('COLLAB-CLIENT-4.2 sends and receives stateless messages', async () => {

@@ -16,6 +16,24 @@ export const MESSAGE_TYPES = Object.freeze({
   stateless: 5,
 });
 
+/**
+ * The close codes a server closes a socket with. A client reconnects after any of them except a
+ * refusal, which arrives as an auth denied message first.
+ */
+export const CLOSE_CODES = Object.freeze({
+  /** The server is shutting down. */
+  shutdown: 1001,
+  /** Storage failed while the room opened; try again later. */
+  unavailable: 1011,
+  /** The URL names no room, or a frame cannot be read. */
+  badRequest: 4400,
+  unauthenticated: 4401,
+  forbidden: 4403,
+  notFound: 4404,
+  /** Another writer stored the room first; reconnect to load what it stored. */
+  conflict: 4409,
+});
+
 /** The auth message subtypes. `denied` is y-protocols' permission-denied message. */
 export const AUTH_SUBTYPES = Object.freeze({ denied: 0, granted: 1 });
 

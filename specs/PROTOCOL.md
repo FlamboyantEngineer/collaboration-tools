@@ -25,6 +25,13 @@ A stateless message shall carry one varString payload that the library passes th
 Implementation: `src/protocol/messages.ts`
 Verification: `src/protocol/messages.test.ts`
 
+### COLLAB-PROTOCOL-1.4 - Frame encoders
+
+`encodeSyncStep1(doc)` shall write a sync step 1 frame with the document's state vector, `encodeSyncUpdate(update)` a sync update frame, and `encodeAwarenessFrame(update)` an awareness frame around an encoded awareness update. `CLOSE_CODES` shall name the close codes a server uses: `shutdown` 1001, `unavailable` 1011, `badRequest` 4400, `unauthenticated` 4401, `forbidden` 4403, `notFound` 4404 and `conflict` 4409.
+
+Implementation: `src/protocol/frames.ts`, `src/protocol/messages.ts`
+Verification: `src/protocol/frames.test.ts`
+
 ## COLLAB-PROTOCOL-2 - Room URLs
 
 ### COLLAB-PROTOCOL-2.1 - Building a room URL

@@ -14,7 +14,7 @@ The library is in early `0.x` development and has no release yet.
 | -------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | `@flamboyantengineer/collaboration-tools/protocol` | The wire protocol, room URLs and the clock both sides share. Safe on a server and in a browser. |
 | `@flamboyantengineer/collaboration-tools/client`   | The client provider and its connection state.                                                   |
-| `@flamboyantengineer/collaboration-tools/server`   | Host adapter contracts, their defaults and in-memory storage.                                   |
+| `@flamboyantengineer/collaboration-tools/server`   | The room server, its WebSocket attachment, the host adapter contracts and in-memory storage.    |
 
 `@y/y` (Yjs 14) is a peer dependency, so the host and the library share one Yjs.
 

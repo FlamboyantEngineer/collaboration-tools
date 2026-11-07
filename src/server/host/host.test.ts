@@ -16,6 +16,7 @@ describe('resolveRoomHost', () => {
           ok: true;
           actor: { id: string; name?: string | undefined };
           access: 'read-write' | 'read-only';
+          room?: string | undefined;
         }
       | { ok: false; reason: 'unauthenticated' | 'forbidden' | 'not-found' }
     >();

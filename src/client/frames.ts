@@ -3,6 +3,7 @@ import * as syncProtocol from '@y/protocols/sync';
 import { applyUpdate, type Doc } from '@y/y';
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
+import { encodeAwarenessFrame } from '../protocol/frames.js';
 import {
   type AuthMessage,
   MESSAGE_TYPES,
@@ -34,9 +35,10 @@ function readSync(decoder: decoding.Decoder, reply: encoding.Encoder, context: F
 }
 
 function writeAllAwareness(reply: encoding.Encoder, awareness: awarenessProtocol.Awareness) {
-  encoding.writeVarUint(reply, MESSAGE_TYPES.awareness);
-  const clients = [...awareness.getStates().keys()];
-  encoding.writeVarUint8Array(reply, awarenessProtocol.encodeAwarenessUpdate(awareness, clients));
+  encoding.writeUint8Array(
+    reply,
+    encodeAwarenessState(awareness, [...awareness.getStates().keys()]),
+  );
 }
 
 /**
@@ -65,33 +67,11 @@ export function readServerFrame(
   return encoding.length(reply) > 0 ? encoding.toUint8Array(reply) : null;
 }
 
-/** A sync step 1 frame: the document's state vector, asking for what it is missing. */
-export function encodeSyncStep1(doc: Doc): Uint8Array<ArrayBuffer> {
-  const encoder = encoding.createEncoder();
-  encoding.writeVarUint(encoder, MESSAGE_TYPES.sync);
-  syncProtocol.writeSyncStep1(encoder, doc);
-  return encoding.toUint8Array(encoder);
-}
-
-/** A sync update frame carrying `update`. */
-export function encodeSyncUpdate(update: Uint8Array): Uint8Array<ArrayBuffer> {
-  const encoder = encoding.createEncoder();
-  encoding.writeVarUint(encoder, MESSAGE_TYPES.sync);
-  syncProtocol.writeUpdate(encoder, update);
-  return encoding.toUint8Array(encoder);
-}
-
 /** An awareness frame with the given clients' states, or with `states` in their place. */
-export function encodeAwarenessFrame(
+export function encodeAwarenessState(
   awareness: awarenessProtocol.Awareness,
   clients: number[],
   states?: Map<number, Record<string, unknown>>,
 ): Uint8Array<ArrayBuffer> {
-  const encoder = encoding.createEncoder();
-  encoding.writeVarUint(encoder, MESSAGE_TYPES.awareness);
-  encoding.writeVarUint8Array(
-    encoder,
-    awarenessProtocol.encodeAwarenessUpdate(awareness, clients, states),
-  );
-  return encoding.toUint8Array(encoder);
+  return encodeAwarenessFrame(awarenessProtocol.encodeAwarenessUpdate(awareness, clients, states));
 }
