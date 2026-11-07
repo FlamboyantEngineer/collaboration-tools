@@ -3,6 +3,7 @@
  * identity, permissions, storage, logging and time only through these.
  */
 
+import type { Doc } from '@y/y';
 import type { RoomClock } from '../../protocol/clock.js';
 import type { RoomAccess } from '../../protocol/messages.js';
 
@@ -38,12 +39,66 @@ export type RoomAdmission =
        * then shares one live document. Defaults to the requested name.
        */
       room?: string | undefined;
+      /** What the connection may change beyond its access, checked by the room's write rules. */
+      capabilities?: readonly string[] | undefined;
+      /**
+       * When this decision expires, in clock milliseconds. The server asks `refresh` before then,
+       * and closes the connection at that time when there is no `refresh` or it fails.
+       */
+      expiresAt?: number | undefined;
     }
   | { ok: false; reason: RoomRefusal };
+
+/** What a connection's decision is refreshed from. */
+export interface RoomRefreshRequest extends RoomAdmissionRequest {
+  /** The admitted actor; `room` is the canonical room the connection joined. */
+  actor: RoomActor;
+}
 
 /** Decides who may join a room and with what access. */
 export interface RoomAuth {
   admit(request: RoomAdmissionRequest): Promise<RoomAdmission>;
+  /**
+   * Decides again for a connection whose decision is about to expire. A refusal closes it; a
+   * new access or capabilities apply at once.
+   */
+  refresh?(request: RoomRefreshRequest): Promise<RoomAdmission>;
+}
+
+/** A change a connection's update would make, for a room's finer write check. */
+export interface RoomWriteChange {
+  room: string;
+  actor: RoomActor;
+  capabilities: ReadonlySet<string>;
+  /**
+   * Each top-level type the update changes, with the keys directly under it whose content it
+   * changes; a position in a list or text is `null`.
+   */
+  changes: ReadonlyMap<string, ReadonlySet<string | null>>;
+  /**
+   * Runs `inspect` on a copy of the room's document. `inspect` may observe the copy, then calls
+   * `apply` to apply the update to it. Copying costs a full encode of the room, so call it only
+   * for the changes that need it.
+   */
+  simulate<T>(inspect: (copy: Doc, apply: () => void) => T): T;
+}
+
+/** Which connections may change which parts of a room. */
+export interface RoomWriteRules {
+  /** The capability a connection needs to change each top-level type. */
+  required?: Readonly<Record<string, string>> | undefined;
+  /** Top-level types no connection may change; only the host's room handles change them. */
+  serverOnly?: readonly string[] | undefined;
+  /** The capability a type neither list names needs. By default, read-write access is enough. */
+  otherwise?: string | undefined;
+  /** A finer check of a change the lists allow; `false` refuses it. */
+  check?: ((change: RoomWriteChange) => boolean) | undefined;
+}
+
+/** Gives each room its write rules. */
+export interface RoomPermissions {
+  /** The rules for `room`, read once when it loads, or `null` for none beyond access. */
+  rulesFor(room: string): RoomWriteRules | null;
 }
 
 /** One stored state of a room. */
@@ -101,6 +156,8 @@ export interface RoomLogger {
 export interface RoomHost {
   auth: RoomAuth;
   persistence: RoomPersistence;
+  /** Defaults to no rules beyond each connection's access. */
+  permissions?: RoomPermissions | undefined;
   /** Defaults to a logger that drops every message. */
   logger?: RoomLogger | undefined;
   /** Defaults to the platform clock. */

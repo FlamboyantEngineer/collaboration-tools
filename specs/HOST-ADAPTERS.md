@@ -6,7 +6,7 @@ A host runs rooms by passing a `RoomHost`: the adapters through which the librar
 
 ### COLLAB-HOST-1.1 - Required and optional adapters
 
-A `RoomHost` shall require an `auth` adapter (`RoomAuth`) and a `persistence` adapter (`RoomPersistence`), and shall accept an optional `logger` (`RoomLogger`) and `clock` (`RoomClock`). `RoomAuth.admit(request)` shall receive the room the client asked for, the token it sent (or `null`), the URL's other query parameters and the upgrade request's headers, and shall resolve to either `{ ok: true, actor, access, room? }`, where `access` is `read-write` or `read-only` and `room` is the canonical name of a room the client named by an alias, or `{ ok: false, reason }`, where `reason` is `unauthenticated`, `forbidden` or `not-found`. Library source shall not read `process`, `localStorage`, `sessionStorage` or `indexedDB`.
+A `RoomHost` shall require an `auth` adapter (`RoomAuth`) and a `persistence` adapter (`RoomPersistence`), and shall accept optional `permissions` (`RoomPermissions`, COLLAB-SERVER-7.2), `logger` (`RoomLogger`) and `clock` (`RoomClock`). `RoomAuth.admit(request)` shall receive the room the client asked for, the token it sent (or `null`), the URL's other query parameters and the upgrade request's headers, and shall resolve to either `{ ok: true, actor, access, room?, capabilities?, expiresAt? }`, where `access` is `read-write` or `read-only`, `room` is the canonical name of a room the client named by an alias, `capabilities` are what the room's write rules check, and `expiresAt` is when the decision expires (COLLAB-SERVER-7.4), or `{ ok: false, reason }`, where `reason` is `unauthenticated`, `forbidden` or `not-found`. Library source shall not read `process`, `localStorage`, `sessionStorage` or `indexedDB`.
 
 Implementation: `src/server/host/adapters.ts`, `eslint.config.js`
 Verification: `src/server/host/host.test.ts`
@@ -15,7 +15,7 @@ Verification: `src/server/host/host.test.ts`
 
 ### COLLAB-HOST-2.1 - Resolving a host
 
-`resolveRoomHost(host)` shall return the host's adapters with `SILENT_LOGGER`, which drops every message, in place of a missing logger and `PLATFORM_CLOCK` in place of a missing clock. Adapters the host passes shall be kept as they are.
+`resolveRoomHost(host)` shall return the host's adapters with `NO_PERMISSIONS`, which gives no room any rules, in place of missing permissions, `SILENT_LOGGER`, which drops every message, in place of a missing logger and `PLATFORM_CLOCK` in place of a missing clock. Adapters the host passes shall be kept as they are.
 
 Implementation: `src/server/host/host.ts`
 Verification: `src/server/host/host.test.ts`

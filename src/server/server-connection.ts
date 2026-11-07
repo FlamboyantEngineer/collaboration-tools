@@ -4,11 +4,13 @@ import type {
   RoomActor,
   RoomAdmission,
   RoomAdmissionRequest,
+  RoomRefreshRequest,
   RoomRefusal,
 } from './host/adapters.js';
 import type { ResolvedRoomHost } from './host/host.js';
 import type { LiveRoom, RoomMember } from './live-room.js';
 import { type MemberContext, readMemberFrame, sendWelcome } from './member-frames.js';
+import { startReauthorization } from './reauthorization.js';
 import type { RoomRegistry } from './room-registry.js';
 
 /** The part of a server-side WebSocket the room server uses. */
@@ -65,9 +67,13 @@ interface Connection {
   queue: Uint8Array[];
   context: MemberContext | null;
   closed: boolean;
+  /** Stops refreshing the connection's decision. */
+  stopReauthorization: (() => void) | null;
 }
 
 function leave(connection: Connection) {
+  connection.stopReauthorization?.();
+  connection.stopReauthorization = null;
   if (!connection.context) return;
   const { room, member } = connection.context;
   connection.context = null;
@@ -80,6 +86,35 @@ function close(connection: Connection, code: number, reason: string) {
   connection.closed = true;
   connection.socket.close(code, reason);
   leave(connection);
+}
+
+/** Tells the client why, so it stops reconnecting, and closes the socket. */
+function refuse(connection: Connection, reason: string, code: number) {
+  if (connection.closed) return;
+  connection.socket.send(encodeAuthMessage({ type: 'denied', reason }));
+  close(connection, code, reason);
+}
+
+/** Applies a refreshed decision: a refusal closes the connection, a new access is announced. */
+function applyDecision(connection: Connection, decision: RoomAdmission) {
+  const { context } = connection;
+  if (!context) return;
+  if (!decision.ok) return refuse(connection, decision.reason, REFUSAL_CODES[decision.reason]);
+  context.capabilities = new Set(decision.capabilities);
+  if (decision.access === context.access) return;
+  context.access = decision.access;
+  context.member.send(encodeAuthMessage({ type: 'granted', access: decision.access }));
+}
+
+function startRefreshing(connection: Connection, request: RoomRefreshRequest, expiresAt: number) {
+  connection.stopReauthorization = startReauthorization({
+    host: connection.dependencies.host,
+    request,
+    expiresAt,
+    onDecision: (decision) => applyDecision(connection, decision),
+    // Without the auth message the client reconnects, with a fresh token.
+    onExpired: () => close(connection, CLOSE_CODES.unauthenticated, 'expired'),
+  });
 }
 
 function read(connection: Connection, frame: Uint8Array, context: MemberContext) {
@@ -97,6 +132,7 @@ function read(connection: Connection, frame: Uint8Array, context: MemberContext)
 /** Adds an admitted connection to its loaded room and replays what it sent meanwhile. */
 function enter(connection: Connection, room: LiveRoom, admission: RoomAdmitted) {
   const { socket, dependencies } = connection;
+  const { actor } = admission;
   const member: RoomMember = {
     send: (frame) => {
       if (!connection.closed) socket.send(frame);
@@ -106,14 +142,24 @@ function enter(connection: Connection, room: LiveRoom, admission: RoomAdmitted) 
   const context: MemberContext = {
     room,
     member,
+    actor,
     access: admission.access,
+    capabilities: new Set(admission.capabilities),
     onStateless: (payload) =>
       dependencies.onStateless?.({
         room: room.name,
-        actor: admission.actor,
+        actor,
         payload,
         reply: (answer) => member.send(encodeStatelessMessage(answer)),
       }),
+    onRefusedWrite: (types) => {
+      dependencies.host.logger.warn('A connection sent a change its access does not allow.', {
+        room: room.name,
+        actor: actor.id,
+        types,
+      });
+      refuse(connection, 'unauthorized-write', CLOSE_CODES.forbidden);
+    },
   };
   connection.context = context;
   room.members.add(member);
@@ -135,10 +181,7 @@ async function join(connection: Connection, request: RoomServerRequest) {
     headers: request.headers,
   });
   if (connection.closed) return;
-  if (!admission.ok) {
-    connection.socket.send(encodeAuthMessage({ type: 'denied', reason: admission.reason }));
-    return close(connection, REFUSAL_CODES[admission.reason], admission.reason);
-  }
+  if (!admission.ok) return refuse(connection, admission.reason, REFUSAL_CODES[admission.reason]);
   const name = admission.room ?? requested;
   const load = await registry.acquire(name);
   if (!load.ok) {
@@ -150,6 +193,10 @@ async function join(connection: Connection, request: RoomServerRequest) {
   }
   if (connection.closed) return registry.release(load.room);
   enter(connection, load.room, admission);
+  if (admission.expiresAt !== undefined) {
+    const refresh = { room: name, token, params, headers: request.headers, actor: admission.actor };
+    startRefreshing(connection, refresh, admission.expiresAt);
+  }
 }
 
 /**
@@ -161,7 +208,14 @@ export function connectMember(
   request: RoomServerRequest,
   dependencies: ConnectionDependencies,
 ): RoomServerConnection {
-  const connection: Connection = { socket, dependencies, queue: [], context: null, closed: false };
+  const connection: Connection = {
+    socket,
+    dependencies,
+    queue: [],
+    context: null,
+    closed: false,
+    stopReauthorization: null,
+  };
   join(connection, request).catch((error: unknown) => {
     dependencies.host.logger.error('Admitting a connection failed.', { error });
     close(connection, CLOSE_CODES.unavailable, 'unavailable');
