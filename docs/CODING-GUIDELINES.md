@@ -4,7 +4,7 @@ Every file in `src/` and `test/` follows these rules; tests also follow [TESTING
 
 ## Naming
 
-**N1. Files and directories are kebab-case,** named for what the module holds (`memory-persistence.ts`, `room-registry.ts`). **(enforced: `check:specs` lists every module by path)**
+**N1. Files and directories are kebab-case,** named for what the module holds (`memory-persistence.ts`, `room-registry.ts`). **(enforced: `check:structure`)**
 
 **N2. Functions say what they do.** Factories are `create<Thing>` (`createMemoryPersistence`), pure functions start with a verb (`resolveRoomHost`, `encodeSyncStep`), predicates start with `is` or `has`. **(enforced: camelCase)**
 
@@ -12,13 +12,15 @@ Every file in `src/` and `test/` follows these rules; tests also follow [TESTING
 
 **N4. One vocabulary.** A room is named by its `room` string, a stored state carries `revision` and `sequence`, and a connection's access is `read-write` or `read-only`. Do not introduce synonyms.
 
+**N5. Every type a public type names is exported.** A host can name the type of every value it passes or receives, so an exported type never names an unexported one. **(enforced: `check:public-types`)**
+
 ## Structure
 
-**S1. Three places for code.** `src/protocol/` holds the wire protocol and what both sides share (room access, the clock), with no Node or DOM APIs; `src/client/` holds the client provider, which runs in a browser; `src/server/` holds the room server, which runs on Node. Each is an entry point with its own `index.ts`. `test/` holds repository-wide tests and shared fixtures.
+**S1. Three places for code.** `src/protocol/` holds the wire protocol and what both sides share (room access, the clock), with no Node or DOM APIs; `src/client/` holds the client provider, which runs in a browser; `src/server/` holds the room server, which runs on Node. `protocol/` and `client/` import no Node module and not `ws`. Each is an entry point with its own `index.ts`. `test/` holds repository-wide tests and shared fixtures. **(enforced for imports: `check:structure`)**
 
-**S2. `index.ts` only re-exports** the public API with named `export … from` statements. No default exports anywhere (TS7). **(enforced)**
+**S2. `index.ts` only re-exports** the public API with named `export … from` statements. No default exports anywhere (TS7). **(enforced: `check:structure`, lint)**
 
-**S3. Dependencies point one way.** `client/` and `server/` may import `protocol/`; neither imports the other, and `protocol/` imports neither.
+**S3. Dependencies point one way.** `client/` and `server/` may import `protocol/`; neither imports the other, and `protocol/` imports neither. Library source never imports `test/`, and no two modules import each other, directly or through others. **(enforced: `check:structure`)**
 
 **S4. Module order:** imports, exported types, module constants, private helpers, exported functions.
 

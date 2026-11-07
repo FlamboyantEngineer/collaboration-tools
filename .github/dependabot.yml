@@ -1,0 +1,17 @@
+# Weekly update pull requests against dev: npm packages grouped into one pull request per week,
+# and the pinned actions, whose commit pins Dependabot moves along with their version comments.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        patterns: ['*']
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly

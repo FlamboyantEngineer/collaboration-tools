@@ -8,7 +8,7 @@ Before every commit, run the checks that cover your change. All of them must pas
 
 ```sh
 npm run lint && npm run format:check && npm run typecheck
-npm run check:references && npm run check:specs
+npm run check:references && npm run check:specs && npm run check:structure
 npm run test:changed   # unit tests related to your changes since origin/dev
 ```
 

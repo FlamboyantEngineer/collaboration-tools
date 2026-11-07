@@ -5,8 +5,16 @@
 import { startNpm } from './lib/npm.mjs';
 
 const STAGES = [
-  ['lint', 'format:check', 'typecheck', 'check:references', 'check:specs', 'build'],
-  ['test'],
+  [
+    'lint',
+    'format:check',
+    'typecheck',
+    'check:references',
+    'check:specs',
+    'check:structure',
+    'build',
+  ],
+  ['test', 'check:public-types', 'check:package'],
 ];
 
 function run(script) {

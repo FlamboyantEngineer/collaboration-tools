@@ -12,7 +12,17 @@ The library is in `0.x` development. APIs are experimental until `1.0.0`: use mi
 
 The wire protocol and the stored room state are stricter than the API: a client and a server of the same minor version always understand each other, and a state stored by any released version opens unchanged in every later version.
 
-Releases are `v<version>` git tags, installed by hosts as git dependencies.
+Every pull request that changes the published package adds a changeset (`npx changeset`, see [.changeset/README.md](.changeset/README.md)).
+
+## Releasing
+
+Releases are `v<version>` git tags, installed by hosts as git dependencies. A host may also pin a `dev` commit; `npm run check:git-install` checks that a commit installs and prepares that way.
+
+1. On a branch from `dev`, run `npx changeset version`. It sets the version in `package.json`, writes `CHANGELOG.md` and removes the consumed changesets. Merge it into `dev`, then merge `dev` into `main` through the release pull request.
+2. On `main`, matching `origin/main`, with a clean tree, run `npm run release` (it refuses otherwise). It builds the library, checks the package, tags `v<version>` on a release commit that adds the built `dist/` to `main`'s commit with a manifest that has no `prepare` script, and packs the library tarball from that tree.
+3. Push the tag (`git push origin v<version>`), create its GitHub Release from the changelog entry and attach the tarball.
+
+`./cleanup` (`cleanup.cmd` on Windows) switches to `dev`, deletes every other local branch and removes test reports, coverage and tool caches.
 
 ## Source rules
 
