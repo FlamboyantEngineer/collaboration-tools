@@ -22,9 +22,9 @@ Verification: `src/server/host/host.test.ts`
 
 ### COLLAB-HOST-2.2 - Platform clock
 
-`PLATFORM_CLOCK` shall read the time from `Date.now` and schedule and cancel callbacks with the global timers.
+`PLATFORM_CLOCK` (from the protocol entry point, shared with the client) shall read the time from `Date.now` and schedule and cancel callbacks with the global timers.
 
-Implementation: `src/server/host/host.ts`
+Implementation: `src/protocol/clock.ts`
 Verification: `src/server/host/host.test.ts`
 
 ## COLLAB-HOST-3 - Stored states

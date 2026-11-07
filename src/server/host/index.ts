@@ -1,10 +1,8 @@
 export type {
-  RoomAccess,
   RoomActor,
   RoomAdmission,
   RoomAdmissionRequest,
   RoomAuth,
-  RoomClock,
   RoomHost,
   RoomLoadResult,
   RoomLogger,
@@ -12,11 +10,10 @@ export type {
   RoomRefusal,
   RoomStoreInput,
   RoomStoreResult,
-  RoomTimer,
   StoredRoomState,
   StoredRoomVersion,
 } from './adapters.js';
-export { PLATFORM_CLOCK, type ResolvedRoomHost, resolveRoomHost, SILENT_LOGGER } from './host.js';
+export { type ResolvedRoomHost, resolveRoomHost, SILENT_LOGGER } from './host.js';
 export {
   createMemoryPersistence,
   type MemoryPersistence,

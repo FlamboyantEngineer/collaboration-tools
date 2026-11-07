@@ -14,7 +14,7 @@ Every file in `src/` and `test/` follows these rules; tests also follow [TESTING
 
 ## Structure
 
-**S1. Three places for code.** `src/protocol/` holds the wire protocol, with no Node or DOM APIs; `src/client/` holds the client provider, which runs in a browser; `src/server/` holds the room server, which runs on Node. Each is an entry point with its own `index.ts`. `test/` holds repository-wide tests and shared fixtures.
+**S1. Three places for code.** `src/protocol/` holds the wire protocol and what both sides share (room access, the clock), with no Node or DOM APIs; `src/client/` holds the client provider, which runs in a browser; `src/server/` holds the room server, which runs on Node. Each is an entry point with its own `index.ts`. `test/` holds repository-wide tests and shared fixtures.
 
 **S2. `index.ts` only re-exports** the public API with named `export … from` statements. No default exports anywhere (TS7). **(enforced)**
 

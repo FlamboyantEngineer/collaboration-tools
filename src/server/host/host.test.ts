@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { PLATFORM_CLOCK } from '../../protocol/clock.js';
 import type { RoomAdmission, RoomAuth, RoomHost, RoomPersistence } from './adapters.js';
-import { PLATFORM_CLOCK, resolveRoomHost, SILENT_LOGGER } from './host.js';
+import { resolveRoomHost, SILENT_LOGGER } from './host.js';
 import { createMemoryPersistence } from './memory-persistence.js';
 
 const auth: RoomAuth = {

@@ -7,6 +7,8 @@ Each file in this directory specifies one area of the library or one shared cont
 | Document                             | Owns                                                                  |
 | ------------------------------------ | --------------------------------------------------------------------- |
 | [HOST-ADAPTERS.md](HOST-ADAPTERS.md) | The adapters a host passes in, their defaults and stored room states. |
+| [PROTOCOL.md](PROTOCOL.md)           | The frames on the wire and room URLs.                                 |
+| [CLIENT.md](CLIENT.md)               | The client provider and its connection state.                         |
 | `<AREA>.md`                          | One area's behaviour.                                                 |
 
 ## File format

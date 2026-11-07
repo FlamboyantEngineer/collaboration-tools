@@ -3,8 +3,8 @@
  * identity, permissions, storage, logging and time only through these.
  */
 
-/** What a connection may do in its room. */
-export type RoomAccess = 'read-write' | 'read-only';
+import type { RoomClock } from '../../protocol/clock.js';
+import type { RoomAccess } from '../../protocol/messages.js';
 
 /** The person or service behind a connection. */
 export interface RoomActor {
@@ -83,16 +83,6 @@ export interface RoomPersistence {
 export interface RoomLogger {
   warn(message: string, details?: Readonly<Record<string, unknown>>): void;
   error(message: string, details?: Readonly<Record<string, unknown>>): void;
-}
-
-/** The opaque handle a {@link RoomClock} returns for a scheduled callback. */
-export type RoomTimer = unknown;
-
-/** The time source for debounces, timeouts and retries, so tests and hosts control time. */
-export interface RoomClock {
-  now(): number;
-  setTimeout(callback: () => void, delayMs: number): RoomTimer;
-  clearTimeout(timer: RoomTimer): void;
 }
 
 /** Everything a host passes to run rooms. */
