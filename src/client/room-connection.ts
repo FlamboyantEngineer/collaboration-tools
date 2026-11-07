@@ -1,8 +1,8 @@
 import { removeAwarenessStates } from '@y/protocols/awareness';
 import type { RoomTimer } from '../protocol/clock.js';
+import { encodeSyncUpdate } from '../protocol/frames.js';
 import type { AuthMessage } from '../protocol/messages.js';
 import { type ConnectionStateStore, reportListenerError } from './connection-state.js';
-import { encodeSyncUpdate } from './frames.js';
 import { openSocketSession, type SocketConfig, type SocketSession } from './socket-session.js';
 import type { UnconfirmedUpdates } from './unconfirmed-updates.js';
 

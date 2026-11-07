@@ -82,9 +82,9 @@ Verification: `src/client/room-provider.test.ts`
 
 ### COLLAB-CLIENT-4.1 - Awareness
 
-The provider shall send local awareness changes, apply the room's, answer a query for every awareness state, and drop every remote state when its socket closes. Without `options.awareness` it shall create one for the document.
+The provider shall send local awareness changes, apply the room's without sending them back, answer a query for every awareness state, and drop every remote state when its socket closes. On each open it shall set its local state again, which gives it a newer clock than the room kept when the last socket closed, and send that. Without `options.awareness` it shall create one for the document.
 
-Implementation: `src/client/room-provider.ts`, `src/client/room-connection.ts`, `src/client/frames.ts`
+Implementation: `src/client/room-provider.ts`, `src/client/room-connection.ts`, `src/client/frames.ts`, `src/client/socket-session.ts`
 Verification: `src/client/room-provider.test.ts`, `src/client/frames.test.ts`
 
 ### COLLAB-CLIENT-4.2 - Stateless messages

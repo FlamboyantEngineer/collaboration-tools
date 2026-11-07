@@ -19,6 +19,8 @@ export interface RoomAdmissionRequest {
   room: string;
   /** The token the client sent, or `null` when it sent none. */
   token: string | null;
+  /** The URL's other query parameters, which a client sets with its `params` option. */
+  params: Readonly<Record<string, string>>;
   /** The upgrade request's headers, by lower-case name. */
   headers: Readonly<Record<string, string | readonly string[] | undefined>>;
 }
@@ -27,7 +29,17 @@ export interface RoomAdmissionRequest {
 export type RoomRefusal = 'unauthenticated' | 'forbidden' | 'not-found';
 
 export type RoomAdmission =
-  { ok: true; actor: RoomActor; access: RoomAccess } | { ok: false; reason: RoomRefusal };
+  | {
+      ok: true;
+      actor: RoomActor;
+      access: RoomAccess;
+      /**
+       * The room's canonical name, when the client named it by an alias. Every alias of a room
+       * then shares one live document. Defaults to the requested name.
+       */
+      room?: string | undefined;
+    }
+  | { ok: false; reason: RoomRefusal };
 
 /** Decides who may join a room and with what access. */
 export interface RoomAuth {
@@ -51,8 +63,8 @@ export type RoomLoadResult =
   | { status: 'found'; state: StoredRoomState }
   /** The room has never been stored: the library seeds it. */
   | { status: 'missing' }
-  /** The stored state cannot be read: the library may seed it again. */
-  | { status: 'corrupt'; reason: string }
+  /** The stored state cannot be read: the library starts the room empty and stores over `version`. */
+  | { status: 'corrupt'; reason: string; version: StoredRoomVersion }
   /** Storage failed: the room does not open. */
   | { status: 'unavailable'; error: Error };
 

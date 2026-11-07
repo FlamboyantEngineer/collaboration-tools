@@ -1,7 +1,9 @@
 export { PLATFORM_CLOCK, type RoomClock, type RoomTimer } from './clock.js';
+export { encodeAwarenessFrame, encodeSyncStep1, encodeSyncUpdate } from './frames.js';
 export {
   AUTH_SUBTYPES,
   type AuthMessage,
+  CLOSE_CODES,
   encodeAuthMessage,
   encodeStatelessMessage,
   isRoomAccess,

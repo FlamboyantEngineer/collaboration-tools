@@ -8,7 +8,7 @@ import {
   type RoomConnectionListener,
   type RoomConnectionState,
 } from './connection-state.js';
-import { encodeAwarenessFrame } from './frames.js';
+import { encodeAwarenessState } from './frames.js';
 import {
   cancelReconnect,
   openSession,
@@ -101,9 +101,14 @@ function listen(connection: RoomConnection, connectivity: ConnectivityEvents | n
   const handleDocUpdate = (update: Uint8Array, updateOrigin: unknown) => {
     if (updateOrigin !== connection.origin) sendLocalUpdate(connection, update);
   };
-  const handleAwarenessUpdate = (changes: Record<'added' | 'updated' | 'removed', number[]>) => {
+  const handleAwarenessUpdate = (
+    changes: Record<'added' | 'updated' | 'removed', number[]>,
+    updateOrigin: unknown,
+  ) => {
+    // What the room sent is the room's already.
+    if (updateOrigin === connection.origin) return;
     const clients = [...changes.added, ...changes.updated, ...changes.removed];
-    connection.session?.send(encodeAwarenessFrame(awareness, clients));
+    connection.session?.send(encodeAwarenessState(awareness, clients));
   };
   const goOffline = () => {
     connection.offline = true;
@@ -142,7 +147,7 @@ export function createRoomProvider(options: RoomProviderOptions): RoomProvider {
   const disconnect = () => {
     connection.shouldConnect = false;
     cancelReconnect(connection);
-    connection.session?.send(encodeAwarenessFrame(awareness, [awareness.clientID], new Map()));
+    connection.session?.send(encodeAwarenessState(awareness, [awareness.clientID], new Map()));
     connection.session?.close();
   };
   const destroy = () => {

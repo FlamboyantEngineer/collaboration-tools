@@ -1,9 +1,10 @@
 import type { Awareness } from '@y/protocols/awareness';
 import type { Doc } from '@y/y';
 import type { RoomClock } from '../protocol/clock.js';
+import { encodeSyncStep1 } from '../protocol/frames.js';
 import type { AuthMessage } from '../protocol/messages.js';
 import { reportListenerError } from './connection-state.js';
-import { encodeAwarenessFrame, encodeSyncStep1, readServerFrame } from './frames.js';
+import { readServerFrame } from './frames.js';
 import { frameBytes, type RoomSocket, type RoomSocketFactory } from './room-socket.js';
 import { createStaleSocketCheck } from './stale-socket-check.js';
 
@@ -42,9 +43,10 @@ const CHECK_CADENCE_MS = 4_000;
 
 function sendOpeningFrames(socket: RoomSocket, { doc, awareness }: SocketConfig) {
   socket.send(encodeSyncStep1(doc));
-  if (awareness.getLocalState() !== null) {
-    socket.send(encodeAwarenessFrame(awareness, [awareness.clientID]));
-  }
+  // Setting the state again gives it a newer clock than the one the server kept when the last
+  // socket closed, so the server takes it; the provider sends the awareness update it emits.
+  const state = awareness.getLocalState();
+  if (state !== null) awareness.setLocalState(state);
 }
 
 /** Opens a socket to `url` and drives it until it closes. */
