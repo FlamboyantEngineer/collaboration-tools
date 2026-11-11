@@ -65,6 +65,10 @@ function handleAuth(connection: RoomConnection, message: AuthMessage) {
     connection.store.update({ access: message.access });
     return;
   }
+  if (message.type === 'generation') {
+    connection.store.update({ roomGeneration: message.generation });
+    return;
+  }
   connection.shouldConnect = false;
   connection.receipts.end();
   connection.store.update({ refusal: message.reason });
@@ -115,7 +119,8 @@ export function openSession(connection: RoomConnection): void {
   connection.store.update({ status: 'connecting' });
   try {
     connection.session = openSocketSession(connection.url(), connection, {
-      onOpen: () => connection.store.update({ status: 'connected', refusal: null }),
+      onOpen: () =>
+        connection.store.update({ status: 'connected', refusal: null, roomGeneration: null }),
       onRemoteUpdate: (update, isSyncStep2) => handleRemoteUpdate(connection, update, isSyncStep2),
       onAuth: (message) => handleAuth(connection, message),
       onStateless: (payload) => notifyStateless(connection, payload),

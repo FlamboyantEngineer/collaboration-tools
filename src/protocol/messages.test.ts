@@ -38,6 +38,7 @@ describe('protocol messages', () => {
     { type: 'granted', access: 'read-write' },
     { type: 'granted', access: 'read-only' },
     { type: 'denied', reason: 'forbidden' },
+    { type: 'generation', generation: 'g2' },
   ])('COLLAB-PROTOCOL-1.2 round-trips the auth message %o', (message) => {
     const frame = encodeAuthMessage(message);
 
@@ -64,6 +65,7 @@ describe('protocol messages', () => {
 
     expect(unknown(7, 'read-write')).toBeNull();
     expect(unknown(AUTH_SUBTYPES.granted, 'readonly')).toBeNull();
+    expect(unknown(AUTH_SUBTYPES.generation, '')).toBeNull();
     expect(isRoomAccess('read-only')).toBe(true);
     expect(isRoomAccess('admin')).toBe(false);
   });

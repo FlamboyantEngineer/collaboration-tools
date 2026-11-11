@@ -1,5 +1,5 @@
 import { Awareness } from '@y/protocols/awareness';
-import type { Doc } from '@y/y';
+import { applyUpdate, type Doc } from '@y/y';
 import { PLATFORM_CLOCK, type RoomClock } from '../protocol/clock.js';
 import { encodeStatelessMessage } from '../protocol/messages.js';
 import { readRoomGeneration } from '../protocol/room-meta.js';
@@ -44,6 +44,12 @@ export interface RoomProviderOptions {
   clock?: RoomClock | undefined;
   /** Closes the socket while offline and reconnects when back online, such as a window. */
   connectivity?: ConnectivityEvents | null | undefined;
+  /**
+   * Local changes an earlier provider had not had confirmed, from its `getUnconfirmedUpdate()`.
+   * The provider applies them to `doc` with its remote origin before it connects and tracks them
+   * until the room confirms them. Restore the earlier document first, so its generation is checked.
+   */
+  unconfirmedUpdate?: Uint8Array | null | undefined;
   /** Whether to connect right away. Defaults to `true`. */
   connect?: boolean | undefined;
   /** The longest wait between reconnect attempts. Defaults to 2500 ms. */
@@ -73,6 +79,11 @@ export interface RoomProvider {
    * connection's changes never reach the room, so for it the receipt covers only the room's own.
    */
   whenStored(): Promise<boolean>;
+  /**
+   * An update holding the local changes the room has not confirmed, or `null` when there are none.
+   * Keep it to pass as `unconfirmedUpdate` after a reload. It reads the whole document.
+   */
+  getUnconfirmedUpdate(): Uint8Array | null;
   /** Whether a transaction with this origin came from the server. */
   isRemoteOrigin(origin: unknown): boolean;
   connect(): void;
@@ -152,10 +163,20 @@ function listen(connection: RoomConnection, connectivity: ConnectivityEvents | n
   };
 }
 
+/** Applies and tracks local changes an earlier provider had not had confirmed. */
+function restoreUnconfirmed(connection: RoomConnection, update: Uint8Array) {
+  applyUpdate(connection.doc, update, connection.origin);
+  connection.unconfirmed.record(update, connection.clock.now());
+  connection.store.update({ hasUnconfirmedChanges: !connection.unconfirmed.isEmpty() });
+}
+
 /** Creates a {@link RoomProvider} (specs/CLIENT.md). */
 export function createRoomProvider(options: RoomProviderOptions): RoomProvider {
   const connection = createConnection(options);
   const { awareness, store } = connection;
+  // Before listening, so the restore is not sent twice, and before connecting, so the handshake
+  // sends it and the first state reports it.
+  if (options.unconfirmedUpdate) restoreUnconfirmed(connection, options.unconfirmedUpdate);
   const stopListening = listen(connection, options.connectivity);
 
   const connect = () => {
@@ -195,6 +216,7 @@ export function createRoomProvider(options: RoomProviderOptions): RoomProvider {
     },
     sendStateless: (payload) => connection.session?.send(encodeStatelessMessage(payload)) ?? false,
     whenStored: () => (connection.destroyed ? Promise.resolve(false) : requestReceipt(connection)),
+    getUnconfirmedUpdate: () => connection.unconfirmed.encodeMissing(connection.doc),
     isRemoteOrigin: (candidate) => candidate === connection.origin,
     connect,
     disconnect,

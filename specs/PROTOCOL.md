@@ -13,7 +13,7 @@ Verification: `src/protocol/messages.test.ts`, `src/client/frames.test.ts`
 
 ### COLLAB-PROTOCOL-1.2 - Auth messages
 
-An auth message shall be the subtype, a varUint, then a varString. Subtype 0 (`AUTH_SUBTYPES.denied`) is y-protocols' permission-denied message, and its string is the refusal reason. Subtype 1 (`AUTH_SUBTYPES.granted`) grants the connection access, and its string is `read-write` or `read-only`. `encodeAuthMessage(message)` shall write a whole auth frame, and `readAuthMessage(decoder)` shall read one after its message type, returning `null` for a subtype or access it does not know. `isRoomAccess(value)` shall tell whether a value is one of the two accesses.
+An auth message shall be the subtype, a varUint, then a varString. Subtype 0 (`AUTH_SUBTYPES.denied`) is y-protocols' permission-denied message, and its string is the refusal reason. Subtype 1 (`AUTH_SUBTYPES.granted`) grants the connection access, and its string is `read-write` or `read-only`. Subtype 2 (`AUTH_SUBTYPES.generation`) names the room's generation (COLLAB-PROTOCOL-3.1) to a client about to be refused for holding another one, and its string is that generation; a reader that does not know it ignores it. `encodeAuthMessage(message)` shall write a whole auth frame, and `readAuthMessage(decoder)` shall read one after its message type, returning `null` for a subtype or access it does not know, or an empty generation. `isRoomAccess(value)` shall tell whether a value is one of the two accesses.
 
 Implementation: `src/protocol/messages.ts`
 Verification: `src/protocol/messages.test.ts`

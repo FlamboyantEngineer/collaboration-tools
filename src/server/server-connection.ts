@@ -203,8 +203,13 @@ async function join(connection: Connection, request: RoomServerRequest) {
   if (connection.closed) return registry.release(load.room);
   // A document from another generation would bring back what the room discarded when it started
   // over; a client without a generation has never synced and may join any.
-  if (generation !== null && generation !== readRoomGeneration(load.room.doc)) {
+  const roomGeneration = readRoomGeneration(load.room.doc);
+  if (generation !== null && generation !== roomGeneration) {
     registry.release(load.room);
+    // The client may read and so may learn which generation to recover into.
+    if (roomGeneration !== null) {
+      connection.socket.send(encodeAuthMessage({ type: 'generation', generation: roomGeneration }));
+    }
     return refuse(connection, 'generation-mismatch', CLOSE_CODES.gone);
   }
   if (admission.expiresAt !== undefined && host.clock.now() >= admission.expiresAt) {
