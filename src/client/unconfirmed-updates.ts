@@ -26,7 +26,7 @@ export interface UnconfirmedUpdates {
   /**
    * An update holding only the unconfirmed content of `doc`, or `null` when nothing is pending.
    * A reconnect handshake misses content the server already holds but never echoed; resending it
-   * is idempotent.
+   * is idempotent. Encoding reads the whole document.
    */
   encodeMissing(doc: Doc): Uint8Array | null;
 }

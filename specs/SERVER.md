@@ -165,10 +165,10 @@ Verification: `src/server/update-changes.test.ts`
 
 ### COLLAB-SERVER-7.2 - Write rules
 
-`host.permissions.rulesFor(room)` shall give a room its `RoomWriteRules` when it loads. A changed top-level type in `serverOnly`, or the room metadata type (COLLAB-PROTOCOL-3.1) in every room, shall refuse the update; otherwise the type shall need the capability `required` names for it, or `otherwise` when it has no own entry in `required`, or nothing beyond read-write access. When the lists allow the change, the rules' `check(change)` shall decide, with the room, actor, capabilities and changes; `change.simulate(inspect)` shall run `inspect` on a copy of the room with a function that applies the update to it. A `check` that throws shall refuse. A refused update shall not be applied: the server shall log it, send an auth denied message with `unauthorized-write` and close the socket with `CLOSE_CODES.forbidden`, and stop processing the remainder of that frame. The host's room handles are not checked.
+`host.permissions.rulesFor(room)` shall give a room its `RoomWriteRules` when it loads. A changed top-level type in `serverOnly`, or the room metadata type (COLLAB-PROTOCOL-3.1) in every room, shall refuse the update; otherwise the type shall need the capability `required` names for it, or `otherwise` when it has no own entry in `required`, or nothing beyond read-write access. When the lists allow the change, the rules' `check(change)` shall decide, with the room, actor, capabilities and changes; `change.simulate(inspect)` shall run `inspect` on a copy of the room with a function that applies the update to it. A `check` that throws shall refuse. Deciding by the lists alone shall read only the update and the room's items it touches, so it costs about as much in a room of a megabyte as in an empty one; only `simulate` copies the room. A refused update shall not be applied: the server shall log it, send an auth denied message with `unauthorized-write` and close the socket with `CLOSE_CODES.forbidden`, and stop processing the remainder of that frame. The host's room handles are not checked.
 
 Implementation: `src/server/write-rules.ts`, `src/server/member-frames.ts`, `src/server/server-connection.ts`, `src/server/live-room.ts`, `src/server/host/adapters.ts`, `src/server/host/host.ts`
-Verification: `src/server/authorization.test.ts`, `src/server/host/host.test.ts`
+Verification: `src/server/authorization.test.ts`, `src/server/write-rules.test.ts`, `src/server/host/host.test.ts`
 
 ### COLLAB-SERVER-7.3 - Incomplete updates
 
@@ -188,7 +188,7 @@ Verification: `src/server/authorization.test.ts`
 
 ### COLLAB-SERVER-8.1 - Generations
 
-A room that loads from its seed shall start a new generation (COLLAB-PROTOCOL-3.1), a random UUID, and a found state without a generation shall be given one, keeping its content. A room with a new generation shall store it before any member joins; when that store does not succeed, the load shall fail (COLLAB-SERVER-1.3). A connection whose URL names a generation other than the room's shall be refused with an auth denied message with `generation-mismatch` and closed with `CLOSE_CODES.gone`, since its document holds history the room discarded. A connection that names none has never synced and may join.
+A room that loads from its seed shall start a new generation (COLLAB-PROTOCOL-3.1), a random UUID, and a found state without a generation shall be given one, keeping its content. A room with a new generation shall store it before any member joins; when that store does not succeed, the load shall fail (COLLAB-SERVER-1.3). A connection whose URL names a generation other than the room's shall be sent an auth generation message with the room's generation, then refused with an auth denied message with `generation-mismatch` and closed with `CLOSE_CODES.gone`, since its document holds history the room discarded. A connection that names none has never synced and may join.
 
 Implementation: `src/server/stored-room.ts`, `src/server/live-room.ts`, `src/server/server-connection.ts`, `src/server/write-rules.ts`
 Verification: `src/server/durability.test.ts`

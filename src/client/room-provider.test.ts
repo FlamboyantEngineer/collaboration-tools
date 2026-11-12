@@ -1,4 +1,4 @@
-import { Doc } from '@y/y';
+import { Doc, encodeStateAsUpdate } from '@y/y';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createLoopbackServer, flush, type LoopbackServer } from '../../test/loopback-server.js';
 import { createManualClock } from '../../test/manual-clock.js';
@@ -86,6 +86,7 @@ describe('createRoomProvider', () => {
       syncCount: 0,
       hasUnconfirmedChanges: false,
       refusal: null,
+      roomGeneration: null,
       closeCode: null,
       saveStatus: null,
     });
@@ -250,6 +251,50 @@ describe('createRoomProvider', () => {
     expect(pending).toBe(true);
     expect(server.doc('notes/1').get('text').toString()).toBe('kept');
     expect(provider.getState()).toMatchObject({ syncCount: 2, hasUnconfirmedChanges: false });
+  });
+
+  it('COLLAB-CLIENT-3.3 keeps unconfirmed changes across a reload and sends them on connect', async () => {
+    const server = createLoopbackServer();
+    const offline = open(server, { connect: false });
+    offline.doc.get('text').insert(0, 'offline');
+    const kept = offline.getUnconfirmedUpdate();
+    offline.destroy();
+
+    const states: RoomConnectionState[] = [];
+    const origins: boolean[] = [];
+    const doc = new Doc();
+    doc.on('update', (_update: Uint8Array, origin: unknown) => origins.push(origin !== null));
+    const reloaded = open(server, { doc, connect: false, unconfirmedUpdate: kept });
+    reloaded.subscribe((state) => states.push(state));
+    const restored = reloaded.getState().hasUnconfirmedChanges;
+    const restoredText = text(reloaded);
+    reloaded.connect();
+    await flush();
+
+    expect(kept).not.toBeNull();
+    expect(restored).toBe(true);
+    expect(restoredText).toBe('offline');
+    expect(origins).toEqual([true]);
+    expect(server.doc('notes/1').get('text').toString()).toBe('offline');
+    expect(states.at(-1)).toMatchObject({ synced: true, hasUnconfirmedChanges: false });
+    expect(reloaded.getUnconfirmedUpdate()).toBeNull();
+  });
+
+  it('COLLAB-CLIENT-3.3 COLLAB-CLIENT-4.3 applies a restored update with the remote origin', () => {
+    const source = new Doc();
+    source.get('text').insert(0, 'kept');
+    const doc = new Doc();
+    const origins: unknown[] = [];
+    doc.on('update', (_update: Uint8Array, origin: unknown) => origins.push(origin));
+    const provider = open(createLoopbackServer(), {
+      doc,
+      connect: false,
+      unconfirmedUpdate: encodeStateAsUpdate(source),
+    });
+
+    expect(origins).toHaveLength(1);
+    expect(provider.isRemoteOrigin(origins[0])).toBe(true);
+    expect(provider.getUnconfirmedUpdate()).not.toBeNull();
   });
 
   it('COLLAB-CLIENT-4.1 shares awareness and forgets remote states when the socket closes', async () => {

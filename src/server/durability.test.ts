@@ -110,7 +110,7 @@ describe('room generations', () => {
     handle.release();
   });
 
-  it('COLLAB-SERVER-8.1 COLLAB-CLIENT-5.1 refuses a document from another generation and lets one from the same generation rejoin', async () => {
+  it('COLLAB-SERVER-8.1 COLLAB-CLIENT-5.1 refuses a document from another generation, naming the room’s, and lets one from the same generation rejoin', async () => {
     const state = stateOf('stored', 'g1');
     const memory = createMemoryPersistence({
       initial: { notes: { update: state, revision: 'r1', sequence: 1 } },
@@ -134,7 +134,9 @@ describe('room generations', () => {
     expect(other.getState()).toMatchObject({
       status: 'disconnected',
       refusal: 'generation-mismatch',
+      roomGeneration: 'g1',
     });
+    expect(same.getState().roomGeneration).toBeNull();
     expect(sockets.sockets[1]?.serverClose?.code).toBe(CLOSE_CODES.gone);
     expect(storedDoc(memory).get('text').toString()).toBe('stored');
   });

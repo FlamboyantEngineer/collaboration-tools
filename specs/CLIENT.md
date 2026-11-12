@@ -13,7 +13,7 @@ Verification: `src/client/room-provider.test.ts`
 
 ### COLLAB-CLIENT-1.2 - Sync handshake and connection state
 
-The provider shall connect at once unless `connect` is `false`. On open it shall send a sync step 1 and, when it has one, its local awareness state; it shall answer the server's sync step 1 and apply the server's sync step 2 and updates with an origin of its own. `getState()` shall return the connection state: `status` (`connecting`, `connected` or `disconnected`), `access` (`pending` until the server grants access on the current socket, then `read-write` or `read-only`), `synced` (whether the current socket has received the server's sync step 2), `syncCount` (completed handshakes since creation), `hasUnconfirmedChanges`, `refusal`, `closeCode` (the close code of the last socket that closed, `null` when the provider closed it) and `saveStatus` (COLLAB-CLIENT-5.2). A provider that has not connected shall report `disconnected`, `pending`, not synced and zero handshakes.
+The provider shall connect at once unless `connect` is `false`. On open it shall send a sync step 1 and, when it has one, its local awareness state; it shall answer the server's sync step 1 and apply the server's sync step 2 and updates with an origin of its own. `getState()` shall return the connection state: `status` (`connecting`, `connected` or `disconnected`), `access` (`pending` until the server grants access on the current socket, then `read-write` or `read-only`), `synced` (whether the current socket has received the server's sync step 2), `syncCount` (completed handshakes since creation), `hasUnconfirmedChanges`, `refusal`, `roomGeneration` (COLLAB-CLIENT-5.1), `closeCode` (the close code of the last socket that closed, `null` when the provider closed it) and `saveStatus` (COLLAB-CLIENT-5.2). A provider that has not connected shall report `disconnected`, `pending`, not synced and zero handshakes.
 
 Implementation: `src/client/room-provider.ts`, `src/client/room-connection.ts`, `src/client/socket-session.ts`, `src/client/frames.ts`, `src/client/connection-state.ts`
 Verification: `src/client/room-provider.test.ts`
@@ -78,6 +78,13 @@ After each completed handshake, the provider shall send an update holding the co
 Implementation: `src/client/unconfirmed-updates.ts`, `src/client/room-connection.ts`
 Verification: `src/client/room-provider.test.ts`
 
+### COLLAB-CLIENT-3.3 - Keeping unconfirmed changes across reloads
+
+`getUnconfirmedUpdate()` shall return an update holding the content of the document still unconfirmed (COLLAB-CLIENT-3.1), or `null` when none is. A provider created with `unconfirmedUpdate` shall, before it reports any state or connects, apply that update to the document with the origin it applies the server's updates with and track its content as unconfirmed, so the handshake and the resend after it send that content and `whenStored()` covers it.
+
+Implementation: `src/client/room-provider.ts`, `src/client/unconfirmed-updates.ts`
+Verification: `src/client/room-provider.test.ts`
+
 ## COLLAB-CLIENT-4 - Awareness, stateless messages and lifetime
 
 ### COLLAB-CLIENT-4.1 - Awareness
@@ -96,7 +103,7 @@ Verification: `src/client/room-provider.test.ts`
 
 ### COLLAB-CLIENT-4.3 - Remote origin
 
-`isRemoteOrigin(origin)` shall be `true` exactly for the transaction origin the provider applies the server's updates with.
+`isRemoteOrigin(origin)` shall be `true` exactly for the transaction origin the provider applies the server's updates and a restored unconfirmed update (COLLAB-CLIENT-3.3) with.
 
 Implementation: `src/client/room-provider.ts`
 Verification: `src/client/room-provider.test.ts`
@@ -112,9 +119,9 @@ Verification: `src/client/room-provider.test.ts`
 
 ### COLLAB-CLIENT-5.1 - Generations
 
-Each connection attempt shall name the generation the document holds (`readRoomGeneration`, COLLAB-PROTOCOL-3.1) in the room URL, or none for a document that has not synced. When the server refuses it with `generation-mismatch`, the provider stops as for any refusal; the host then opens the room again with a new document.
+Each connection attempt shall name the generation the document holds (`readRoomGeneration`, COLLAB-PROTOCOL-3.1) in the room URL, or none for a document that has not synced. When the server refuses it with `generation-mismatch`, the provider stops as for any refusal, and `roomGeneration` shall be the room's generation the server named before refusing (COLLAB-PROTOCOL-1.2), until a socket opens again; the host then opens the room again with a new document, which may merge in what the old one held.
 
-Implementation: `src/client/room-provider.ts`
+Implementation: `src/client/room-provider.ts`, `src/client/room-connection.ts`, `src/client/connection-state.ts`, `src/server/server-connection.ts`
 Verification: `src/server/durability.test.ts`
 
 ### COLLAB-CLIENT-5.2 - Save status

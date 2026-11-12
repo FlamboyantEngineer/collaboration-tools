@@ -38,11 +38,23 @@ export const CLOSE_CODES = Object.freeze({
   gone: 4410,
 });
 
-/** The auth message subtypes. `denied` is y-protocols' permission-denied message. */
-export const AUTH_SUBTYPES = Object.freeze({ denied: 0, granted: 1 });
+/**
+ * The auth message subtypes. `denied` is y-protocols' permission-denied message; `generation`
+ * names the room's generation to a client refused for holding another one.
+ */
+export const AUTH_SUBTYPES = Object.freeze({ denied: 0, granted: 1, generation: 2 });
 
 export type AuthMessage =
-  { type: 'granted'; access: RoomAccess } | { type: 'denied'; reason: string };
+  | { type: 'granted'; access: RoomAccess }
+  | { type: 'denied'; reason: string }
+  | { type: 'generation'; generation: string };
+
+/** Each auth message's subtype and string. */
+function authFields(message: AuthMessage): [number, string] {
+  if (message.type === 'granted') return [AUTH_SUBTYPES.granted, message.access];
+  if (message.type === 'denied') return [AUTH_SUBTYPES.denied, message.reason];
+  return [AUTH_SUBTYPES.generation, message.generation];
+}
 
 const ACCESS_VALUES: ReadonlySet<string> = new Set<RoomAccess>(['read-write', 'read-only']);
 
@@ -54,14 +66,10 @@ export function isRoomAccess(value: unknown): value is RoomAccess {
 /** Encodes a whole auth frame, message type included. */
 export function encodeAuthMessage(message: AuthMessage): Uint8Array<ArrayBuffer> {
   const encoder = encoding.createEncoder();
+  const [subtype, text] = authFields(message);
   encoding.writeVarUint(encoder, MESSAGE_TYPES.auth);
-  if (message.type === 'granted') {
-    encoding.writeVarUint(encoder, AUTH_SUBTYPES.granted);
-    encoding.writeVarString(encoder, message.access);
-  } else {
-    encoding.writeVarUint(encoder, AUTH_SUBTYPES.denied);
-    encoding.writeVarString(encoder, message.reason);
-  }
+  encoding.writeVarUint(encoder, subtype);
+  encoding.writeVarString(encoder, text);
   return encoding.toUint8Array(encoder);
 }
 
@@ -75,6 +83,9 @@ export function readAuthMessage(decoder: decoding.Decoder): AuthMessage | null {
   if (subtype === AUTH_SUBTYPES.denied) return { type: 'denied', reason: text };
   if (subtype === AUTH_SUBTYPES.granted && isRoomAccess(text)) {
     return { type: 'granted', access: text };
+  }
+  if (subtype === AUTH_SUBTYPES.generation && text !== '') {
+    return { type: 'generation', generation: text };
   }
   return null;
 }

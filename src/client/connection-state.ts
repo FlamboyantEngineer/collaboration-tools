@@ -17,6 +17,11 @@ export interface RoomConnectionState {
   hasUnconfirmedChanges: boolean;
   /** The server's reason for refusing the connection, or `null`. */
   refusal: string | null;
+  /**
+   * The room's generation, as the server named it when it refused the document for holding
+   * another one, or `null`.
+   */
+  roomGeneration: string | null;
   /** The close code of the last socket that closed, or `null`. */
   closeCode: number | null;
   /** Whether the room has stored its changes, as the server last said on this socket, or `null`. */
@@ -39,6 +44,7 @@ const INITIAL_STATE: RoomConnectionState = Object.freeze({
   syncCount: 0,
   hasUnconfirmedChanges: false,
   refusal: null,
+  roomGeneration: null,
   closeCode: null,
   saveStatus: null,
 });
