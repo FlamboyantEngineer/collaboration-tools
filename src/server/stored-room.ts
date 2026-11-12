@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { applyUpdate, Doc, encodeStateAsUpdate } from '@y/y';
 import { GENERATION_KEY, readRoomGeneration, ROOM_META_TYPE } from '../protocol/room-meta.js';
 import type {
@@ -45,7 +44,7 @@ export function recordMetric(host: ResolvedRoomHost, event: RoomMetricEvent): vo
 
 /** Gives `doc` a new generation, replacing the one it has. */
 function startGeneration(doc: Doc) {
-  doc.get(ROOM_META_TYPE).setAttr(GENERATION_KEY, randomUUID());
+  doc.get(ROOM_META_TYPE).setAttr(GENERATION_KEY, globalThis.crypto.randomUUID());
 }
 
 type StoredRead =

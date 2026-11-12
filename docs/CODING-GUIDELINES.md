@@ -16,11 +16,11 @@ Every file in `src/` and `test/` follows these rules; tests also follow [TESTING
 
 ## Structure
 
-**S1. Three places for code.** `src/protocol/` holds the wire protocol and what both sides share (room access, the clock), with no Node or DOM APIs; `src/client/` holds the client provider, which runs in a browser; `src/server/` holds the room server, which runs on Node. `protocol/` and `client/` import no Node module and not `ws`. Each is an entry point with its own `index.ts`. `test/` holds repository-wide tests and shared fixtures. **(enforced for imports: `check:structure`)**
+**S1. Four places for code.** `src/protocol/` holds the wire protocol and what both sides share (room access, the clock), with no Node or DOM APIs; `src/client/` holds the client provider, which runs in a browser; `src/server/` holds the room server, which runs on Node and in a browser; `src/testing/` holds the in-process sockets for host tests and labs. Only `src/server/websocket/`, the WebSocket attachment, imports a Node module or `ws`, and only it imports its own modules. Each is an entry point with its own `index.ts`. `test/` holds repository-wide tests and shared fixtures. **(enforced for imports: `check:structure`)**
 
 **S2. `index.ts` only re-exports** the public API with named `export … from` statements. No default exports anywhere (TS7). **(enforced: `check:structure`, lint)**
 
-**S3. Dependencies point one way.** `client/` and `server/` may import `protocol/`; neither imports the other, and `protocol/` imports neither. Library source never imports `test/`, and no two modules import each other, directly or through others. **(enforced: `check:structure`)**
+**S3. Dependencies point one way.** `client/` and `server/` may import `protocol/`; neither imports the other, and `protocol/` imports neither. `testing/` may import all three, and nothing imports it. Library source never imports `test/`, and no two modules import each other, directly or through others. **(enforced: `check:structure`)**
 
 **S4. Module order:** imports, exported types, module constants, private helpers, exported functions.
 

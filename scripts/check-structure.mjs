@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Enforces the structural rules of docs/CODING-GUIDELINES.md that lint cannot see:
-//   N1 kebab-case files and directories; S1 `protocol/` and `client/` import no Node module and
-//   not `ws`, since they run in a browser; S2 `index.ts` files only re-export; S3 `client/` and
-//   `server/` import `protocol/` and never each other, `protocol/` imports neither, and library
-//   source never imports `test/` and no modules import each other in a cycle.
+//   N1 kebab-case files and directories; S1 only `server/websocket/` imports a Node module or
+//   `ws`, since everything else runs in a browser too, and only it imports itself; S2 `index.ts`
+//   files only re-export; S3 `client/` and `server/` import `protocol/` and never each other,
+//   `protocol/` imports neither, `testing/` may import all three and nothing imports it, and
+//   library source never imports `test/` and no modules import each other in a cycle.
 
 import { readFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
@@ -12,9 +13,16 @@ import ts from 'typescript';
 import { relativePosix, reportProblems, root, walk } from './lib/script.mjs';
 
 const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+)*$/;
-const AREAS = ['protocol', 'client', 'server'];
+const AREAS = ['protocol', 'client', 'server', 'testing'];
 /** The areas each area may import, besides itself. */
-const ALLOWED = { protocol: [], client: ['protocol'], server: ['protocol'] };
+const ALLOWED = {
+  protocol: [],
+  client: ['protocol'],
+  server: ['protocol'],
+  testing: ['protocol', 'client', 'server'],
+};
+/** The one directory that runs only on Node: the WebSocket attachment's entry point. */
+const NODE_ENTRY = 'src/server/websocket/';
 const NODE_ONLY = new Set([...builtinModules, 'ws']);
 
 const problems = [];
@@ -69,16 +77,17 @@ for (const path of sources) {
   for (const specifier of specifiers(source)) {
     const bare = specifier.replace(/^node:/, '').split('/')[0] ?? '';
     if (!specifier.startsWith('.')) {
-      if (area !== 'server' && (specifier.startsWith('node:') || NODE_ONLY.has(bare))) {
-        problems.push(
-          `${rel(path)}: ${area}/ runs in a browser and cannot import ${specifier} (S1)`,
-        );
+      const nodeOnly = specifier.startsWith('node:') || NODE_ONLY.has(bare);
+      if (nodeOnly && !rel(path).startsWith(NODE_ENTRY)) {
+        problems.push(`${rel(path)}: runs in a browser and cannot import ${specifier} (S1)`);
       }
       continue;
     }
     const target = resolve(dirname(path), specifier.replace(/\.js$/, '.ts'));
     const targetArea = areaOf(target);
-    if (!rel(target).startsWith('src/')) {
+    if (rel(target).startsWith(NODE_ENTRY) && !rel(path).startsWith(NODE_ENTRY)) {
+      problems.push(`${rel(path)}: only ${NODE_ENTRY} imports its Node-only modules (S1)`);
+    } else if (!rel(target).startsWith('src/')) {
       problems.push(`${rel(path)}: library source cannot import ${specifier} (S3)`);
     } else if (area && targetArea && targetArea !== area && !ALLOWED[area].includes(targetArea)) {
       problems.push(`${rel(path)}: ${area}/ cannot import ${targetArea}/ (S3)`);

@@ -1,6 +1,6 @@
 # Room Server
 
-`createRoomServer({ host, ... })` runs rooms for the connections a host passes it, reaching identity, storage, logging and time only through the host's adapters (HOST-ADAPTERS.md). `attachRoomServer(server, options)` binds it to the WebSocket upgrades of a Node HTTP server through `ws`; a host with its own socket layer calls `connect(socket, request)` instead. A room is loaded while a connection or a host handle holds it.
+`createRoomServer({ host, ... })` runs rooms for the connections a host passes it, reaching identity, storage, logging and time only through the host's adapters (HOST-ADAPTERS.md). `attachRoomServer(server, options)`, from its own `./server/websocket` entry point, binds it to the WebSocket upgrades of a Node HTTP server through `ws`; a host with its own socket layer calls `connect(socket, request)` instead. A room is loaded while a connection or a host handle holds it.
 
 ## COLLAB-SERVER-1 - Admission
 
@@ -144,15 +144,15 @@ Verification: `src/server/room-server.test.ts`
 
 `attachRoomServer(rooms, { server, path })` shall accept the HTTP server's WebSocket upgrades whose path is `path` followed by `/<room>`, pass each socket to `rooms.connect`, and leave every other upgrade to other handlers. `close()` shall stop accepting upgrades and drop every socket; the room server's own `close` stores the rooms.
 
-Implementation: `src/server/websocket-attachment.ts`
-Verification: `src/server/websocket-attachment.test.ts`
+Implementation: `src/server/websocket/websocket-attachment.ts`
+Verification: `src/server/websocket/websocket-attachment.test.ts`
 
 ### COLLAB-SERVER-6.2 - Socket limits
 
 A text frame shall close the socket with `CLOSE_CODES.badRequest`, and a frame larger than `maxPayloadBytes` (default 64 MiB) shall close it with 1009. Every socket shall be pinged every `pingIntervalMs` (default 30000) and dropped when it did not answer the previous ping.
 
-Implementation: `src/server/websocket-attachment.ts`
-Verification: `src/server/websocket-attachment.test.ts`
+Implementation: `src/server/websocket/websocket-attachment.ts`
+Verification: `src/server/websocket/websocket-attachment.test.ts`
 
 ## COLLAB-SERVER-7 - Authorization
 
@@ -220,3 +220,12 @@ The server shall pass `host.metrics.record` an event for each load, with its out
 
 Implementation: `src/server/stored-room.ts`, `src/server/live-room.ts`, `src/server/host/adapters.ts`
 Verification: `src/server/durability.test.ts`
+
+## COLLAB-SERVER-9 - Runtimes
+
+### COLLAB-SERVER-9.1 - Outside Node
+
+The `./server` entry point shall import no Node built-in module and not `ws`, so a room server runs in a browser or another JavaScript runtime with a host's own socket layer; room generations come from `globalThis.crypto.randomUUID`. Only the `./server/websocket` entry point, which holds the WebSocket attachment (COLLAB-SERVER-6), shall need Node.
+
+Implementation: `src/server/stored-room.ts`, `src/server/websocket/index.ts`, `scripts/check-structure.mjs`
+Verification: `src/server/browser-entries.test.ts`
