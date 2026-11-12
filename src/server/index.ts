@@ -11,8 +11,3 @@ export {
   type RoomServerSocket,
   type RoomStatelessMessage,
 } from './server-connection.js';
-export {
-  attachRoomServer,
-  type AttachRoomServerOptions,
-  type RoomServerAttachment,
-} from './websocket-attachment.js';

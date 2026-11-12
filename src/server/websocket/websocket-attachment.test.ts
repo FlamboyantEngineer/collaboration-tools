@@ -3,11 +3,11 @@ import type { AddressInfo } from 'node:net';
 import { Doc } from '@y/y';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
-import { createRoomProvider, type RoomProvider } from '../client/room-provider.js';
-import type { RoomSocketFactory } from '../client/room-socket.js';
-import { CLOSE_CODES } from '../protocol/messages.js';
-import { createMemoryPersistence } from './host/memory-persistence.js';
-import { createRoomServer, type RoomServer } from './room-server.js';
+import { createRoomProvider, type RoomProvider } from '../../client/room-provider.js';
+import type { RoomSocketFactory } from '../../client/room-socket.js';
+import { CLOSE_CODES } from '../../protocol/messages.js';
+import { createMemoryPersistence } from '../host/memory-persistence.js';
+import { createRoomServer, type RoomServer } from '../room-server.js';
 import { attachRoomServer, type RoomServerAttachment } from './websocket-attachment.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];

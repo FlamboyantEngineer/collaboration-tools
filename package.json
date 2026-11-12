@@ -29,6 +29,16 @@
       "import": "./dist/server/index.js",
       "default": "./dist/server/index.js"
     },
+    "./server/websocket": {
+      "types": "./dist/server/websocket/index.d.ts",
+      "import": "./dist/server/websocket/index.js",
+      "default": "./dist/server/websocket/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js",
+      "default": "./dist/testing/index.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

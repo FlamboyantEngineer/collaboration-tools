@@ -2,9 +2,9 @@ import { Buffer } from 'node:buffer';
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { type RawData, type WebSocket, WebSocketServer } from 'ws';
-import { PLATFORM_CLOCK, type RoomClock, type RoomTimer } from '../protocol/clock.js';
-import { CLOSE_CODES } from '../protocol/messages.js';
-import type { RoomServer } from './room-server.js';
+import { PLATFORM_CLOCK, type RoomClock, type RoomTimer } from '../../protocol/clock.js';
+import { CLOSE_CODES } from '../../protocol/messages.js';
+import type { RoomServer } from '../room-server.js';
 
 export interface AttachRoomServerOptions {
   /** The HTTP server whose upgrades to accept. */

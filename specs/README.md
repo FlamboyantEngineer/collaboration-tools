@@ -10,6 +10,7 @@ Each file in this directory specifies one area of the library or one shared cont
 | [PROTOCOL.md](PROTOCOL.md)           | The frames on the wire and room URLs.                                 |
 | [CLIENT.md](CLIENT.md)               | The client provider and its connection state.                         |
 | [SERVER.md](SERVER.md)               | The room server and its WebSocket attachment.                         |
+| [TESTING.md](TESTING.md)             | The in-process sockets for host tests and labs.                       |
 | `<AREA>.md`                          | One area's behaviour.                                                 |
 
 ## File format
