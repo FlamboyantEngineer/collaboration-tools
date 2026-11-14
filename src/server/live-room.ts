@@ -3,10 +3,11 @@ import type { Doc } from '@y/y';
 import { encodeAwarenessFrame, encodeSyncUpdate } from '../protocol/frames.js';
 import { encodeStorageMessage } from '../protocol/messages.js';
 import { type AwarenessOwners, createAwarenessOwners } from './awareness-owners.js';
-import type { RoomWriteRules } from './host/adapters.js';
+import type { RoomActor, RoomWriteRules } from './host/adapters.js';
 import type { ResolvedRoomHost } from './host/host.js';
 import { createStoreScheduler, type StoreScheduler } from './store-scheduler.js';
 import {
+  emitEvent,
   openStoredDoc,
   recordMetric,
   type RoomStoreContext,
@@ -38,6 +39,8 @@ export interface LiveRoom {
   readonly store: StoreScheduler;
   /** The host's write rules for the room, read when it loaded. */
   readonly rules: RoomWriteRules;
+  /** Notes that `actor` changed the room, for the next stored event. */
+  edited(actor: RoomActor): void;
   /** Sends `frame` to every member except `except`. */
   broadcast(frame: Uint8Array<ArrayBuffer>, except?: RoomMember): void;
   /** Removes a member and its awareness states. */
@@ -90,6 +93,7 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
     host,
     baseRevision,
     conflicted: false,
+    editors: new Map(),
     onConflict: () => options.onConflict(room),
   };
   const store = createStoreScheduler({
@@ -106,6 +110,9 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
     owners: createAwarenessOwners(),
     store,
     rules,
+    edited: (actor) => {
+      if (!context.editors.has(actor.id)) context.editors.set(actor.id, actor);
+    },
     broadcast: (frame, except) => room.members.forEach((m) => m !== except && m.send(frame)),
     leave: (member) => removeMember(room, member),
     destroy: () => {
@@ -121,6 +128,7 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
       return { ok: false, error: new Error('The room could not store its new generation.') };
     }
   }
+  emitEvent(host, { type: 'loaded', room: name });
   // Every change, from a member or from the host, reaches every member, its sender included: the
   // echo is how a client learns the server holds its change.
   doc.on('update', (update: Uint8Array) => {

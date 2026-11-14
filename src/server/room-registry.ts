@@ -1,6 +1,6 @@
 import type { ResolvedRoomHost } from './host/host.js';
 import { type LiveRoom, loadRoom, type RoomLoad, type StoreTiming } from './live-room.js';
-import { toError } from './stored-room.js';
+import { emitEvent, toError } from './stored-room.js';
 
 export interface RoomRegistryOptions {
   host: ResolvedRoomHost;
@@ -62,6 +62,7 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
     entry.room = null;
     byRoom.delete(room);
     room.destroy();
+    emitEvent(options.host, { type: 'unloaded', room: room.name });
   };
 
   const onConflict = (room: LiveRoom) => {

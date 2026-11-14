@@ -184,6 +184,42 @@ export interface RoomMetrics {
   record(event: RoomMetricEvent): void;
 }
 
+/**
+ * Something that happened in a room, for a host to act on or forward, such as to a webhook. Each
+ * names the room by its canonical name.
+ */
+export type RoomEvent =
+  /** The room loaded, after storing a new generation when it started one. */
+  | { type: 'loaded'; room: string }
+  /** A connection joined the room. */
+  | { type: 'joined'; room: string; actor: RoomActor; access: RoomAccess }
+  /** A connection that joined the room left it. */
+  | { type: 'left'; room: string; actor: RoomActor }
+  | {
+      type: 'stored';
+      room: string;
+      /** The stored state's revision and sequence. */
+      revision: string;
+      sequence: number;
+      /**
+       * Each actor whose change this state is the first to hold, in the order they first changed
+       * the room. Changes made through a room handle name no actor.
+       */
+      editors: readonly RoomActor[];
+    }
+  /** Another writer stored the room first: the room stores nothing more and closes its members. */
+  | { type: 'conflicted'; room: string }
+  /** The room unloaded from memory. */
+  | { type: 'unloaded'; room: string };
+
+/**
+ * Receives what happens in rooms. The library never waits for it: a listener that throws, or
+ * whose promise rejects, changes nothing and is logged.
+ */
+export interface RoomEvents {
+  emit(event: RoomEvent): void | Promise<void>;
+}
+
 /** Where the library reports what a host operator should see. */
 export interface RoomLogger {
   warn(message: string, details?: Readonly<Record<string, unknown>>): void;
@@ -200,6 +236,8 @@ export interface RoomHost {
   seeds?: RoomSeeds | undefined;
   /** Defaults to recording nothing. */
   metrics?: RoomMetrics | undefined;
+  /** Defaults to listening to nothing. */
+  events?: RoomEvents | undefined;
   /** Defaults to a logger that drops every message. */
   logger?: RoomLogger | undefined;
   /** Defaults to the platform clock. */

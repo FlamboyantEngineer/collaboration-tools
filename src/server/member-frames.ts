@@ -67,6 +67,7 @@ function applyMemberUpdate(context: MemberContext, update: Uint8Array) {
   } finally {
     room.doc.off('update', watch);
   }
+  if (applied) room.edited(context.actor);
   const sent = createContentIdsFromUpdate(update);
   const held = applied ? excludeContentIds(sent, createContentIdsFromUpdate(applied)) : sent;
   if (isEmptyIds(held)) return;
