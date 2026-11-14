@@ -1,6 +1,8 @@
 import { applyUpdate, Doc, encodeStateAsUpdate } from '@y/y';
 import { GENERATION_KEY, readRoomGeneration, ROOM_META_TYPE } from '../protocol/room-meta.js';
 import type {
+  RoomActor,
+  RoomEvent,
   RoomGenerationReason,
   RoomLoadResult,
   RoomMetricEvent,
@@ -26,6 +28,8 @@ export interface RoomStoreContext {
   host: ResolvedRoomHost;
   baseRevision: string | null;
   conflicted: boolean;
+  /** The actors whose changes no stored state holds yet, by id, in the order they changed it. */
+  editors: Map<string, RoomActor>;
   onConflict(): void;
 }
 
@@ -39,6 +43,22 @@ export function recordMetric(host: ResolvedRoomHost, event: RoomMetricEvent): vo
     host.metrics.record(event);
   } catch {
     // Metrics never change what a room does.
+  }
+}
+
+/** Passes `event` to the host's events; the room never waits for or fails on a listener. */
+export function emitEvent(host: ResolvedRoomHost, event: RoomEvent): void {
+  const failed = (error: unknown) =>
+    host.logger.warn('A room event listener failed.', {
+      room: event.room,
+      type: event.type,
+      error,
+    });
+  try {
+    const result = host.events.emit(event);
+    if (result instanceof Promise) result.catch(failed);
+  } catch (error) {
+    failed(error);
   }
 }
 
@@ -127,11 +147,23 @@ export async function openStoredDoc(name: string, host: ResolvedRoomHost): Promi
   }
 }
 
+/** Puts back the editors of a store that failed, ahead of those who changed the room since. */
+function restoreEditors(context: RoomStoreContext, editors: readonly RoomActor[]) {
+  const since = [...context.editors.values()];
+  context.editors.clear();
+  for (const actor of [...editors, ...since]) {
+    if (!context.editors.has(actor.id)) context.editors.set(actor.id, actor);
+  }
+}
+
 /** Stores the room's whole document on top of the revision it last stored or loaded. */
 export async function storeRoom(context: RoomStoreContext): Promise<StoreOutcome> {
   const { host, name } = context;
   if (context.conflicted) return 'abandoned';
   const update = encodeStateAsUpdate(context.doc);
+  // Changes made while the store runs belong to the next one.
+  const editors = [...context.editors.values()];
+  context.editors.clear();
   const started = host.clock.now();
   let result: RoomStoreResult;
   try {
@@ -153,11 +185,15 @@ export async function storeRoom(context: RoomStoreContext): Promise<StoreOutcome
   });
   if (result.status === 'stored') {
     context.baseRevision = result.revision;
+    const { revision, sequence } = result;
+    emitEvent(host, { type: 'stored', room: name, revision, sequence, editors });
     return 'stored';
   }
+  restoreEditors(context, editors);
   if (result.status === 'conflict') {
     host.logger.error('Another writer stored the room first.', { room: name });
     context.conflicted = true;
+    emitEvent(host, { type: 'conflicted', room: name });
     context.onConflict();
     return 'abandoned';
   }

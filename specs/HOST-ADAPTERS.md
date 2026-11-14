@@ -6,7 +6,7 @@ A host runs rooms by passing a `RoomHost`: the adapters through which the librar
 
 ### COLLAB-HOST-1.1 - Required and optional adapters
 
-A `RoomHost` shall require an `auth` adapter (`RoomAuth`) and a `persistence` adapter (`RoomPersistence`), and shall accept optional `permissions` (`RoomPermissions`, COLLAB-SERVER-7.2), `seeds` (`RoomSeeds`, COLLAB-SERVER-8.2), `metrics` (`RoomMetrics`, COLLAB-SERVER-8.5), `logger` (`RoomLogger`) and `clock` (`RoomClock`). `RoomAuth.admit(request)` shall receive the room the client asked for, the token it sent (or `null`), the URL's other query parameters and the upgrade request's headers, and shall resolve to either `{ ok: true, actor, access, room?, capabilities?, expiresAt? }`, where `access` is `read-write` or `read-only`, `room` is the canonical name of a room the client named by an alias, `capabilities` are what the room's write rules check, and `expiresAt` is when the decision expires (COLLAB-SERVER-7.4), or `{ ok: false, reason }`, where `reason` is `unauthenticated`, `forbidden` or `not-found`. Library source shall not read `process`, `localStorage`, `sessionStorage` or `indexedDB`.
+A `RoomHost` shall require an `auth` adapter (`RoomAuth`) and a `persistence` adapter (`RoomPersistence`), and shall accept optional `permissions` (`RoomPermissions`, COLLAB-SERVER-7.2), `seeds` (`RoomSeeds`, COLLAB-SERVER-8.2), `metrics` (`RoomMetrics`, COLLAB-SERVER-8.5), `events` (`RoomEvents`, COLLAB-SERVER-8.6), `logger` (`RoomLogger`) and `clock` (`RoomClock`). `RoomAuth.admit(request)` shall receive the room the client asked for, the token it sent (or `null`), the URL's other query parameters and the upgrade request's headers, and shall resolve to either `{ ok: true, actor, access, room?, capabilities?, expiresAt? }`, where `access` is `read-write` or `read-only`, `room` is the canonical name of a room the client named by an alias, `capabilities` are what the room's write rules check, and `expiresAt` is when the decision expires (COLLAB-SERVER-7.4), or `{ ok: false, reason }`, where `reason` is `unauthenticated`, `forbidden` or `not-found`. Library source shall not read `process`, `localStorage`, `sessionStorage` or `indexedDB`.
 
 Implementation: `src/server/host/adapters.ts`, `eslint.config.js`
 Verification: `src/server/host/host.test.ts`
@@ -15,7 +15,7 @@ Verification: `src/server/host/host.test.ts`
 
 ### COLLAB-HOST-2.1 - Resolving a host
 
-`resolveRoomHost(host)` shall return the host's adapters with `NO_PERMISSIONS`, which gives no room any rules, in place of missing permissions, `EMPTY_SEEDS`, which starts every room empty, in place of missing seeds, `NO_METRICS`, which records nothing, in place of missing metrics, `SILENT_LOGGER`, which drops every message, in place of a missing logger and `PLATFORM_CLOCK` in place of a missing clock. Adapters the host passes shall be kept as they are.
+`resolveRoomHost(host)` shall return the host's adapters with `NO_PERMISSIONS`, which gives no room any rules, in place of missing permissions, `EMPTY_SEEDS`, which starts every room empty, in place of missing seeds, `NO_METRICS`, which records nothing, in place of missing metrics, `NO_EVENTS`, which listens to nothing, in place of missing events, `SILENT_LOGGER`, which drops every message, in place of a missing logger and `PLATFORM_CLOCK` in place of a missing clock. Adapters the host passes shall be kept as they are.
 
 Implementation: `src/server/host/host.ts`
 Verification: `src/server/host/host.test.ts`

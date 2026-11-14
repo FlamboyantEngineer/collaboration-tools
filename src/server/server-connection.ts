@@ -13,6 +13,7 @@ import type { LiveRoom, RoomMember } from './live-room.js';
 import { type MemberContext, readMemberFrame, sendWelcome } from './member-frames.js';
 import { startReauthorization } from './reauthorization.js';
 import type { RoomRegistry } from './room-registry.js';
+import { emitEvent } from './stored-room.js';
 
 /** The part of a server-side WebSocket the room server uses. */
 export interface RoomServerSocket {
@@ -81,9 +82,11 @@ function leave(connection: Connection) {
   connection.stopReauthorization?.();
   connection.stopReauthorization = null;
   if (!connection.context) return;
-  const { room, member } = connection.context;
+  const { context } = connection;
+  const { room, member } = context;
   connection.context = null;
   room.leave(member);
+  emitEvent(connection.dependencies.host, { type: 'left', room: room.name, actor: context.actor });
   connection.dependencies.registry.release(room);
 }
 
@@ -173,6 +176,12 @@ function enter(connection: Connection, room: LiveRoom, admission: RoomAdmitted) 
   connection.context = context;
   room.members.add(member);
   dependencies.onJoin();
+  emitEvent(dependencies.host, {
+    type: 'joined',
+    room: room.name,
+    actor,
+    access: admission.access,
+  });
   sendWelcome(context);
   for (const frame of connection.queue.splice(0))
     if (!connection.closed) read(connection, frame, context);

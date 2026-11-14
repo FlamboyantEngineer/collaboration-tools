@@ -221,6 +221,13 @@ The server shall pass `host.metrics.record` an event for each load, with its out
 Implementation: `src/server/stored-room.ts`, `src/server/live-room.ts`, `src/server/host/adapters.ts`
 Verification: `src/server/durability.test.ts`
 
+### COLLAB-SERVER-8.6 - Room events
+
+The server shall pass `host.events.emit` an event, naming the room by its canonical name, when a room loads (`loaded`, after it stores a new generation), a connection joins it (`joined`, with its actor and access), a joined connection leaves it (`left`, with its actor), a store succeeds (`stored`, with the stored revision and sequence and the actors whose changes that state is the first to hold, in the order they first changed the room since the last stored state), another writer stores it first (`conflicted`) and it unloads (`unloaded`). A failed store's actors shall carry over to the store that follows, and changes made through a room handle shall name no actor. The server shall not wait for a listener: one that throws or whose promise rejects shall change nothing and be logged as a warning.
+
+Implementation: `src/server/stored-room.ts`, `src/server/live-room.ts`, `src/server/room-registry.ts`, `src/server/server-connection.ts`, `src/server/member-frames.ts`, `src/server/host/adapters.ts`
+Verification: `src/server/room-events.test.ts`
+
 ## COLLAB-SERVER-9 - Runtimes
 
 ### COLLAB-SERVER-9.1 - Outside Node

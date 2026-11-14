@@ -3,6 +3,8 @@ export type {
   RoomAdmission,
   RoomAdmissionRequest,
   RoomAuth,
+  RoomEvent,
+  RoomEvents,
   RoomGenerationReason,
   RoomHost,
   RoomLoadOutcome,
@@ -24,6 +26,7 @@ export type {
 } from './adapters.js';
 export {
   EMPTY_SEEDS,
+  NO_EVENTS,
   NO_METRICS,
   NO_PERMISSIONS,
   type ResolvedRoomHost,

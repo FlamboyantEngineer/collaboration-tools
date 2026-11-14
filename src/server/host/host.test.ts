@@ -1,7 +1,14 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { PLATFORM_CLOCK } from '../../protocol/clock.js';
 import type { RoomAdmission, RoomAuth, RoomHost, RoomPersistence } from './adapters.js';
-import { EMPTY_SEEDS, NO_METRICS, NO_PERMISSIONS, resolveRoomHost, SILENT_LOGGER } from './host.js';
+import {
+  EMPTY_SEEDS,
+  NO_EVENTS,
+  NO_METRICS,
+  NO_PERMISSIONS,
+  resolveRoomHost,
+  SILENT_LOGGER,
+} from './host.js';
 import { createMemoryPersistence } from './memory-persistence.js';
 
 const auth: RoomAuth = {
@@ -24,7 +31,7 @@ describe('resolveRoomHost', () => {
     >();
   });
 
-  it('COLLAB-HOST-2.1 fills in no rules, empty seeds, no metrics, a silent logger and the platform clock', async () => {
+  it('COLLAB-HOST-2.1 fills in no rules, empty seeds, no metrics, no events, a silent logger and the platform clock', async () => {
     const persistence = createMemoryPersistence();
 
     const host = resolveRoomHost({ auth, persistence });
@@ -35,6 +42,7 @@ describe('resolveRoomHost', () => {
       permissions: NO_PERMISSIONS,
       seeds: EMPTY_SEEDS,
       metrics: NO_METRICS,
+      events: NO_EVENTS,
       logger: SILENT_LOGGER,
       clock: PLATFORM_CLOCK,
     });
@@ -43,6 +51,7 @@ describe('resolveRoomHost', () => {
     expect(() =>
       host.metrics.record({ type: 'generation', room: 'room-a', reason: 'missing' }),
     ).not.toThrow();
+    expect(host.events.emit({ type: 'loaded', room: 'room-a' })).toBeUndefined();
     expect(() => host.logger.error('ignored', { room: 'room-a' })).not.toThrow();
   });
 
