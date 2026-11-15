@@ -97,8 +97,11 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
 
   const unload = async (entry: Entry, room: LiveRoom) => {
     entry.unloading = true;
-    // A room whose storage fails stays loaded, retrying, until its changes are stored.
-    if (entries.get(entry.name) === entry) await room.store.drain();
+    // A room whose storage fails stays loaded, retrying, until its changes are stored. A hold
+    // taken and released while it stores leaves changes the drain did not cover: store those too.
+    while (entry.holds === 0 && entries.get(entry.name) === entry && room.store.isDirty()) {
+      if (!(await room.store.drain())) break;
+    }
     entry.unloading = false;
     if (entry.holds === 0) destroy(entry);
   };

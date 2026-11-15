@@ -96,7 +96,7 @@ Verification: `src/server/store-scheduler.test.ts`
 
 ### COLLAB-SERVER-4.3 - Unloading
 
-When the last connection or handle releases a room, the server shall store its pending changes and then unload it. A room whose storage keeps failing shall stay loaded, retrying, until its changes are stored. A hold taken while the room stores before unloading shall keep it loaded.
+When the last connection or handle releases a room, the server shall store its pending changes and then unload it. A room whose storage keeps failing shall stay loaded, retrying, until its changes are stored. A hold taken while the room stores before unloading shall keep it loaded, and a change that such a hold made before it was released shall be stored before the room unloads.
 
 Implementation: `src/server/room-registry.ts`, `src/server/store-scheduler.ts`
 Verification: `src/server/room-storage.test.ts`

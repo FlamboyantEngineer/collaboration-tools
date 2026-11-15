@@ -116,18 +116,19 @@ export function createStoreScheduler(options: StoreSchedulerOptions): StoreSched
     return outcome;
   };
 
-  // Changes made while a store runs are stored by the same flush, one store after another.
+  // Stores changes made meanwhile too, one store at a time even if another flush starts one.
   const flush = async (): Promise<void> => {
     timer.clear();
-    while (running) await running;
-    while (isDirty() && !ended) {
+    for (let first = true; ; first = false) {
+      while (running) await running;
+      if (!isDirty() || ended || (!first && retrying)) return;
       running = run();
       updateStatus();
-      const outcome = await running.finally(() => {
+      // A failed store ends the loop at the next check: its retry or the end covers the rest.
+      await running.finally(() => {
         running = null;
         updateStatus();
       });
-      if (outcome !== 'stored') return;
     }
   };
 
