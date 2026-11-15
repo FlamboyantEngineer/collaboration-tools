@@ -8,7 +8,7 @@ import {
 } from './room-operations.js';
 import { emitEvent, toError } from './stored-room.js';
 
-export interface RoomRegistryOptions {
+interface RoomRegistryOptions {
   host: ResolvedRoomHost;
   timing: StoreTiming;
   /** Called when another writer stored a room first. The room then unloads without storing. */

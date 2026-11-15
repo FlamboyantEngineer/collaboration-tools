@@ -5,7 +5,7 @@ import { analyzeUpdate } from './update-changes.js';
 import type { ShadowGuard } from './write-guard.js';
 
 /** The connection and update a write check decides on. */
-export interface WriteRequest {
+interface WriteRequest {
   room: string;
   doc: Doc;
   actor: RoomActor;
@@ -19,7 +19,7 @@ export interface WriteRequest {
  * Whether an update may be applied: `refused` lists the top-level types the connection may not
  * change, and `incomplete` means the update builds on content the room lacks.
  */
-export type WriteDecision =
+type WriteDecision =
   { verdict: 'allowed' } | { verdict: 'refused'; types: string[] } | { verdict: 'incomplete' };
 
 function mayChange(rules: RoomWriteRules, type: string, capabilities: ReadonlySet<string>) {

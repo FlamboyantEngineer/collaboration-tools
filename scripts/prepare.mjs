@@ -4,7 +4,7 @@
 // they prepare (`npm_package_resolved`), so a checkout's install builds nothing. Packing with
 // `--ignore-scripts` reuses the tree's existing build (UIC-LABS-1.4).
 
-import { runNpm } from './lib/npm.mjs';
+import { runNpm } from '@flamboyantengineer/ui-components/tooling/lib/npm.mjs';
 
 const isPreparingPackage = Boolean(process.env.npm_package_resolved);
 const ignoresScripts = process.env.npm_config_ignore_scripts === 'true';

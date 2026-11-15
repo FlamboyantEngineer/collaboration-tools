@@ -14,14 +14,14 @@ import {
  * What an update changes: each top-level type it touches, with the keys directly under that type
  * whose content it touches. A position in a list or text has no key and is recorded as `null`.
  */
-export type UpdateChanges = ReadonlyMap<string, ReadonlySet<string | null>>;
+type UpdateChanges = ReadonlyMap<string, ReadonlySet<string | null>>;
 
 /**
  * What applying an update to a document would do, read without applying it. An update is
  * incomplete when it builds on content the document does not have yet: Yjs would hold it back
  * and apply it later, unchecked, when another update fills the gap.
  */
-export type UpdateAnalysis = { complete: true; changes: UpdateChanges } | { complete: false };
+type UpdateAnalysis = { complete: true; changes: UpdateChanges } | { complete: false };
 
 interface Placement {
   root: string;

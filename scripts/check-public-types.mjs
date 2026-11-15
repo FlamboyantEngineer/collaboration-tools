@@ -6,8 +6,12 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
-import { option, reportProblems, root } from './lib/script.mjs';
-import { findUnexportedTypes } from './lib/unexported-types.mjs';
+import {
+  option,
+  reportProblems,
+  root,
+} from '@flamboyantengineer/ui-components/tooling/lib/script.mjs';
+import { findUnexportedTypes } from '@flamboyantengineer/ui-components/tooling/lib/unexported-types.mjs';
 
 const dirOption = option('dir');
 const dir = dirOption === undefined ? join(root, 'dist') : resolve(dirOption);

@@ -8,11 +8,19 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
-import { packTarball } from './lib/npm.mjs';
-import { reportProblems, root } from './lib/script.mjs';
-import { extractTarGz } from './lib/tar.mjs';
+import { packTarball } from '@flamboyantengineer/ui-components/tooling/lib/npm.mjs';
+import { reportProblems, root } from '@flamboyantengineer/ui-components/tooling/lib/script.mjs';
+import { extractTarGz } from '@flamboyantengineer/ui-components/tooling/lib/tar.mjs';
+
+// The shared reference check, run on the unpacked tarball.
+const tooling = join(
+  dirname(createRequire(import.meta.url).resolve('@flamboyantengineer/ui-components/package.json')),
+  'tooling',
+  'bin.mjs',
+);
 
 // Import attributes (`with { type: 'json' }`) need recent toolchains, so the build emits none.
 const IMPORT_ATTRIBUTES =
@@ -80,7 +88,7 @@ try {
   }
 
   try {
-    execFileSync('node', [join(root, 'scripts', 'check-references.mjs'), '--dir', installed], {
+    execFileSync('node', [tooling, 'check-references', '--dir', installed], {
       stdio: 'inherit',
     });
   } catch {

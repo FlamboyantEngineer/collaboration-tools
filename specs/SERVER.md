@@ -264,7 +264,7 @@ Verification: `src/server/room-events.test.ts`
 
 The `./server` entry point shall import no Node built-in module and not `ws`, so a room server runs in a browser or another JavaScript runtime with a host's own socket layer; room generations come from `globalThis.crypto.randomUUID`. Only the `./server/websocket` entry point, which holds the WebSocket attachment (COLLAB-SERVER-6), shall need Node.
 
-Implementation: `src/server/stored-room.ts`, `src/server/websocket/index.ts`, `scripts/check-structure.mjs`
+Implementation: `src/server/stored-room.ts`, `src/server/websocket/index.ts`, `tooling.config.mjs`
 Verification: `src/server/browser-entries.test.ts`
 
 ## COLLAB-SERVER-10 - Durable host operations

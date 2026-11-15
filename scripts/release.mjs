@@ -11,9 +11,9 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { packTarball, runNpm } from './lib/npm.mjs';
-import { root } from './lib/script.mjs';
-import { extractTarGz } from './lib/tar.mjs';
+import { packTarball, runNpm } from '@flamboyantengineer/ui-components/tooling/lib/npm.mjs';
+import { root } from '@flamboyantengineer/ui-components/tooling/lib/script.mjs';
+import { extractTarGz } from '@flamboyantengineer/ui-components/tooling/lib/tar.mjs';
 
 const git = (args, options = {}) =>
   execFileSync('git', args, { cwd: root, encoding: 'utf8', ...options }).trim();

@@ -1,7 +1,7 @@
 import type { RoomClock, RoomTimer } from '../protocol/clock.js';
 
 /** Clients renew their presence every 15 s; a state not renewed for this long is gone. */
-export const AWARENESS_TIMEOUT_MS = 30_000;
+const AWARENESS_TIMEOUT_MS = 30_000;
 const CHECK_INTERVAL_MS = AWARENESS_TIMEOUT_MS / 10;
 
 /** When each presence in a room was last renewed, on the room's clock. */
@@ -13,7 +13,7 @@ export interface AwarenessExpiry {
   destroy(): void;
 }
 
-export interface AwarenessExpiryOptions {
+interface AwarenessExpiryOptions {
   clock: RoomClock;
   /** Called with the ids not renewed for `AWARENESS_TIMEOUT_MS`, which are then forgotten. */
   onExpired(ids: number[]): void;

@@ -1,6 +1,6 @@
 import type { RoomClock, RoomTimer } from '../protocol/clock.js';
 
-export interface StaleSocketCheckOptions {
+interface StaleSocketCheckOptions {
   clock: RoomClock;
   /** A socket that received nothing for longer than this is stale. */
   timeoutMs: number;
@@ -11,7 +11,7 @@ export interface StaleSocketCheckOptions {
   onStale: () => void;
 }
 
-export interface StaleSocketCheck {
+interface StaleSocketCheck {
   start(): void;
   stop(): void;
 }

@@ -9,5 +9,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["scripts/**/*.mjs", "eslint.config.js"]
+  "include": ["scripts/**/*.mjs", "eslint.config.js", "tooling.config.mjs"]
 }

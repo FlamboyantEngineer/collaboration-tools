@@ -20,7 +20,7 @@ export interface RoomCommitResult<T> {
 }
 
 /** The registry operations a serialized canonical operation needs. */
-export interface RoomOperationRegistry {
+interface RoomOperationRegistry {
   acquire(name: string): Promise<RoomLoad>;
   release(room: LiveRoom): void;
   forget(room: LiveRoom): void;

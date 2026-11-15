@@ -20,7 +20,7 @@ export interface SocketConfig {
   readonly report: ErrorReporter;
 }
 
-export interface SocketEvents {
+interface SocketEvents {
   onOpen(): void;
   onRemoteUpdate(update: Uint8Array, isSyncStep2: boolean): void;
   onAuth(message: AuthMessage): void;

@@ -72,7 +72,7 @@ export function refuse(connection: Connection, reason: string, code: number) {
 }
 
 /** Applies a refreshed decision: a refusal closes the connection, a new access is announced. */
-export function applyDecision(connection: Connection, decision: RoomAdmission) {
+function applyDecision(connection: Connection, decision: RoomAdmission) {
   const { context } = connection;
   if (!context) return;
   if (!decision.ok) return refuse(connection, decision.reason, REFUSAL_CODES[decision.reason]);
@@ -150,7 +150,7 @@ export async function refreshConnection(connection: Connection): Promise<void> {
 }
 
 /** Revocation attempts every target even when one custom transport fails. */
-export function revokeConnection(connection: Connection): void {
+function revokeConnection(connection: Connection): void {
   try {
     refuse(connection, 'revoked', CLOSE_CODES.forbidden);
   } catch (error) {
