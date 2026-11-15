@@ -8,8 +8,7 @@ export interface ShadowGuard {
    * the shadow stale: the next check rebuilds it from the room.
    */
   check(change: RoomWriteChange, update: Uint8Array): boolean;
-  /** Applies a change the room took; the shadow may hold it already. */
-  follow(update: Uint8Array): void;
+  /** Stops following the room and closes the guard. */
   destroy(): void;
 }
 
@@ -66,7 +65,12 @@ export function openShadowGuard(room: Doc, open: (shadow: Doc) => RoomWriteGuard
     return transaction !== null && guard.check({ ...change, transaction });
   }
 
+  // Every change the room takes reaches the shadow; one the shadow holds already changes nothing.
+  const follow = (update: Uint8Array) => {
+    if (opened) applyUpdate(opened.shadow, update);
+  };
   reopen();
+  room.on('update', follow);
   return {
     check(change, update) {
       try {
@@ -77,9 +81,9 @@ export function openShadowGuard(room: Doc, open: (shadow: Doc) => RoomWriteGuard
       close();
       return false;
     },
-    follow(update) {
-      if (opened) applyUpdate(opened.shadow, update);
+    destroy() {
+      room.off('update', follow);
+      close();
     },
-    destroy: close,
   };
 }

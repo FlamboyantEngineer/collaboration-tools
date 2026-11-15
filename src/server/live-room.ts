@@ -94,10 +94,6 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
     doc.destroy();
     return { ok: false, error: toError(error) };
   }
-  if (guard) {
-    const shadowed = guard;
-    doc.on('update', (update: Uint8Array) => shadowed.follow(update));
-  }
   const awareness = new Awareness(doc);
   awareness.setLocalState(null);
   // Presence expires on the room clock instead (COLLAB-SERVER-3.4).

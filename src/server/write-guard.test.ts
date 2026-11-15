@@ -23,7 +23,6 @@ describe('openShadowGuard', () => {
     const guard = openShadowGuard(room, () => ({
       check: ({ transaction }) => seen.push(transaction) > 0,
     }));
-    room.on('update', (update: Uint8Array) => guard.follow(update));
     // One writer's keystrokes, each its own update, made on one copy of the room.
     const writer = new Doc();
     applyUpdate(writer, encodeStateAsUpdate(room));
@@ -55,7 +54,6 @@ describe('openShadowGuard', () => {
       shadows.push(shadow);
       return { check: ({ transaction }) => !transaction.doc.get('body').toString().includes('no') };
     });
-    room.on('update', (update: Uint8Array) => guard.follow(update));
     const refused = changeOf(room, (copy) => copy.get('body').insert(0, 'no '));
     const allowed = changeOf(room, (copy) => copy.get('body').insert(4, '!'));
 
