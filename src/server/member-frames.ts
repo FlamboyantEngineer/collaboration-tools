@@ -10,8 +10,10 @@ import {
 } from '@y/y';
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
+import { encodeUtf8 } from 'lib0/string';
 import { encodeAwarenessFrame, encodeSyncStep1, encodeSyncUpdate } from '../protocol/frames.js';
 import {
+  CLOSE_CODES,
   encodeAuthMessage,
   encodeStorageMessage,
   MESSAGE_TYPES,
@@ -19,13 +21,10 @@ import {
   readStorageMessage,
   type RoomAccess,
 } from '../protocol/messages.js';
-import {
-  type AwarenessEntry,
-  decodeAwarenessEntries,
-  encodeAwarenessEntries,
-} from './awareness-owners.js';
+import { decodeAwarenessEntries, encodeAwarenessEntries } from './awareness-owners.js';
 import type { RoomActor } from './host/adapters.js';
 import type { LiveRoom, RoomMember } from './live-room.js';
+import type { RoomTransactionOrigin } from './room-mutations.js';
 import { checkWrite } from './write-rules.js';
 
 /** What reading a member's frames needs. */
@@ -36,6 +35,7 @@ export interface MemberContext {
   /** The access and capabilities a refreshed decision may change. */
   access: RoomAccess;
   capabilities: ReadonlySet<string>;
+  normalizeAwareness(state: Readonly<Record<string, unknown>>): Record<string, unknown> | null;
   onStateless(payload: string): void;
   /** Called when the room's rules refuse an update, which is then dropped. */
   onRefusedWrite(types: readonly string[]): void;
@@ -46,14 +46,13 @@ function isEmptyIds(ids: ContentIds): boolean {
 }
 
 /**
- * Applies a member's update once the room's rules allow it. The room echoes what it changes to
- * every member. What an update message held already, such as one a client resends after losing the
- * echo, is acknowledged to the sender alone, so the sender learns the room holds it. A sync step 2
- * is not: it repeats every deletion the member knows, and the client resends what is still
- * unconfirmed as an update once the handshake completes.
+ * Applies a member's update once the room's rules allow it. The room echoes what it changes to every member; what it held
+ * already, such as an update a client resends after losing the echo, is acknowledged to the
+ * sender alone, so the sender learns the room holds it.
  */
 function applyMemberUpdate(context: MemberContext, update: Uint8Array, acknowledgeHeld: boolean) {
   const { room, member } = context;
+  if (!room.accepting) return member.close(CLOSE_CODES.unavailable, 'room-busy');
   const decision = checkWrite(room.rules, {
     room: room.name,
     doc: room.doc,
@@ -70,7 +69,12 @@ function applyMemberUpdate(context: MemberContext, update: Uint8Array, acknowled
   const watch = (change: Uint8Array) => (applied = change);
   room.doc.on('update', watch);
   try {
-    applyUpdate(room.doc, update, member);
+    const origin: RoomTransactionOrigin = {
+      actor: context.actor,
+      capabilities: context.capabilities,
+      source: 'client',
+    };
+    applyUpdate(room.doc, update, origin);
   } finally {
     room.doc.off('update', watch);
   }
@@ -96,23 +100,43 @@ function readSync(decoder: decoding.Decoder, context: MemberContext) {
   }
   const update = decoding.readVarUint8Array(decoder);
   // A read-only connection's changes never reach the room.
-  if (context.access === 'read-write') {
+  if (context.access === 'read-write')
     applyMemberUpdate(context, update, syncType === syncProtocol.messageYjsUpdate);
-  }
 }
 
 /** Applies the awareness entries the member may write and relays them to the other members. */
-function readAwareness(decoder: decoding.Decoder, { room, member }: MemberContext) {
+function readAwareness(decoder: decoding.Decoder, context: MemberContext) {
+  const { room, member } = context;
   const update = decoding.readVarUint8Array(decoder);
-  const entries = decodeAwarenessEntries(update);
+  const entries = decodeAwarenessEntries(update).map((entry) => {
+    const value: unknown = JSON.parse(entry.state);
+    if (value === null) return { ...entry, state: 'null' };
+    const state = context.normalizeAwareness(value as Record<string, unknown>);
+    if (state === null) throw new Error('Awareness state refused.');
+    const normalized = JSON.stringify({ ...state, actor: context.actor });
+    if (encodeUtf8(normalized).byteLength > 16 * 1024)
+      throw new Error('Awareness state exceeds limit.');
+    return { ...entry, state: normalized };
+  });
+  const unknown = new Set(
+    entries
+      .filter((entry) => !room.awareness.meta.has(entry.clientId))
+      .map((entry) => entry.clientId),
+  );
+  if (room.awareness.meta.size + unknown.size > 1024)
+    throw new Error('Awareness room budget exceeded.');
   const clockOf = (id: number) => room.awareness.meta.get(id)?.clock ?? 0;
   const allowed = room.owners.claim(member, entries, clockOf);
   if (allowed.length === 0) return;
-  const filtered = allowed.length === entries.length ? update : encodeAwarenessEntries(allowed);
+  const filtered = encodeAwarenessEntries(allowed);
+  if (filtered.byteLength > 64 * 1024) throw new Error('Normalized awareness exceeds limit.');
   applyAwarenessUpdate(room.awareness, filtered, member);
-  const gone = (entry: AwarenessEntry) => entry.state === 'null';
-  room.presence.renewed(allowed.filter((entry) => !gone(entry)).map((entry) => entry.clientId));
-  room.presence.forget(allowed.filter(gone).map((entry) => entry.clientId));
+  room.presence.renewed(
+    allowed.filter((entry) => entry.state !== 'null').map((entry) => entry.clientId),
+  );
+  room.presence.forget(
+    allowed.filter((entry) => entry.state === 'null').map((entry) => entry.clientId),
+  );
   room.broadcast(encodeAwarenessFrame(filtered), member);
 }
 

@@ -3,6 +3,7 @@ export type {
   RoomAdmission,
   RoomAdmissionRequest,
   RoomAuth,
+  RoomCommitContext,
   RoomEvent,
   RoomEvents,
   RoomGenerationReason,
@@ -26,6 +27,7 @@ export type {
   StoredRoomState,
   StoredRoomVersion,
 } from './adapters.js';
+export type { RoomAwareness, RoomAwarenessChange } from './awareness-policy.js';
 export {
   EMPTY_SEEDS,
   NO_EVENTS,

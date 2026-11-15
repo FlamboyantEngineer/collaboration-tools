@@ -38,7 +38,7 @@ Verification: `src/server/host/memory-persistence.test.ts`
 
 ### COLLAB-HOST-3.2 - Compare-and-set stores
 
-`store(input)` shall store `input.update` only when `input.baseRevision` is the room's current revision, or `null` for a room with no stored state. Otherwise it shall store nothing and resolve to `conflict` with the room's current revision and sequence, or `null` when it has none.
+`store(input)` receives atomic snapshot attribution in `input.context`: actors, generation and reason. Hosts that need audit records store this context in the same transaction as the snapshot; asynchronous room events are notifications. It shall store `input.update` only when `input.baseRevision` is the room's current revision, or `null` for a room with no stored state. Otherwise it shall store nothing and resolve to `conflict` with the room's current revision and sequence, or `null` when it has none.
 
 Implementation: `src/server/host/adapters.ts`, `src/server/host/memory-persistence.ts`
 Verification: `src/server/host/memory-persistence.test.ts`
@@ -49,3 +49,12 @@ The in-memory persistence shall copy every update it receives and every state it
 
 Implementation: `src/server/host/memory-persistence.ts`
 Verification: `src/server/host/memory-persistence.test.ts`
+
+## COLLAB-HOST-9 - Awareness policy
+
+### COLLAB-HOST-9.1 - Authenticated presence normalization
+
+`RoomHost.awareness` may normalize untrusted awareness objects using the canonical room and authenticated actor. A null result or exception refuses the update. The default preserves client fields but replaces `user` with the authenticated actor; the server always replaces the reserved `actor` field after normalization. Hosts that use a custom user schema must return authenticated identity fields themselves. Admissions may include an opaque authenticated `sessionId` for targeted connection controls.
+
+Implementation: `src/server/host/awareness-policy.ts`, `src/server/host/adapters.ts`, `src/server/host/host.ts`
+Verification: `src/server/server-connection.test.ts`, `src/server/host/host.test.ts`

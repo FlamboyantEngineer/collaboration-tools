@@ -23,6 +23,7 @@ describe('resolveRoomHost', () => {
           ok: true;
           actor: { id: string; name?: string | undefined };
           access: 'read-write' | 'read-only';
+          sessionId?: string | undefined;
           room?: string | undefined;
           capabilities?: readonly string[] | undefined;
           expiresAt?: number | undefined;
@@ -38,6 +39,7 @@ describe('resolveRoomHost', () => {
 
     expect(host).toEqual({
       auth,
+      awareness: host.awareness,
       persistence,
       permissions: NO_PERMISSIONS,
       seeds: EMPTY_SEEDS,

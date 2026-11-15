@@ -4,7 +4,7 @@ import * as encoding from 'lib0/encoding';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createManualClock, type ManualClock } from '../../test/manual-clock.js';
 import { createDeferred } from '../../test/promise-fixtures.js';
-import { connectToServer, settle } from '../../test/server-sockets.js';
+import { connectToServer, readHandle, settle } from '../../test/server-sockets.js';
 import { createRoomProvider, type RoomProvider } from '../client/room-provider.js';
 import { encodeSyncUpdate } from '../protocol/frames.js';
 import { CLOSE_CODES, encodeStatelessMessage, MESSAGE_TYPES } from '../protocol/messages.js';
@@ -82,8 +82,8 @@ describe('room write rules', () => {
       refusal: 'unauthorized-write',
     });
     expect(sockets.sockets[0]?.serverClose?.code).toBe(CLOSE_CODES.forbidden);
-    expect(handle.doc.get('comments').getAttr('t1')).toBe('a comment');
-    expect(handle.doc.get('body').toString()).toBe('');
+    expect(readHandle(handle).get('comments').getAttr('t1')).toBe('a comment');
+    expect(readHandle(handle).get('body').toString()).toBe('');
     expect(logger.warn).toHaveBeenCalledWith(
       'A connection sent a change its access does not allow.',
       { room: 'notes', actor: 'c', types: ['body'] },
@@ -97,12 +97,14 @@ describe('room write rules', () => {
     await settle();
     const handle = await server.openRoom('notes');
 
-    handle.doc.transact(() => handle.doc.get('meta').setAttr('generation', 'g1'), 'host');
+    handle.transact({ actor: { id: 'host' }, capabilities: ['edit'] }, (doc) =>
+      doc.get('meta').setAttr('generation', 'g1'),
+    );
     await settle();
     editor.doc.get('meta').setAttr('generation', 'forged');
     await settle();
 
-    expect(handle.doc.get('meta').getAttr('generation')).toBe('g1');
+    expect(readHandle(handle).get('meta').getAttr('generation')).toBe('g1');
     expect(editor.getState().refusal).toBe('unauthorized-write');
     handle.release();
   });
@@ -153,7 +155,9 @@ describe('room write rules', () => {
     };
     const { server, open } = serve(rules);
     const handle = await server.openRoom('notes');
-    handle.doc.transact(() => handle.doc.get('body').insert(0, 'seed '), 'host');
+    handle.transact({ actor: { id: 'host' }, capabilities: ['edit'] }, (doc) =>
+      doc.get('body').insert(0, 'seed '),
+    );
     const writer = open('editor');
     await settle();
     writer.doc.get('body').insert(5, 'ok');
@@ -165,10 +169,10 @@ describe('room write rules', () => {
     writer.doc.get('body').insert(7, '!');
     await settle();
 
-    expect(seen).toEqual(['e:seed ok', 'e:forbidden seed ok', 'e:seed ok!']);
+    expect(seen).toEqual(['host:seed ', 'e:seed ok', 'e:forbidden seed ok', 'e:seed ok!']);
     expect(refused.getState().refusal).toBe('unauthorized-write');
     expect(writer.getState()).toMatchObject({ status: 'connected', hasUnconfirmedChanges: false });
-    expect(handle.doc.get('body').toString()).toBe('seed ok!');
+    expect(readHandle(handle).get('body').toString()).toBe('seed ok!');
     // One shadow at load, and one rebuilt from the room after the refusal.
     expect(opened.map((shadow) => shadow.isDestroyed)).toEqual([true, false]);
     handle.release();
@@ -193,7 +197,7 @@ describe('room write rules', () => {
     const handle = await server.openRoom('notes');
     const reply = decoding.createDecoder(sent[welcome] ?? new Uint8Array());
 
-    expect(handle.doc.get('body').toString()).toBe('');
+    expect(readHandle(handle).get('body').toString()).toBe('');
     expect([decoding.readVarUint(reply), decoding.readVarUint(reply)]).toEqual([
       MESSAGE_TYPES.sync,
       0,
@@ -316,8 +320,8 @@ describe('authorization boundaries', () => {
     connection.receive(frame);
 
     expect(close).toHaveBeenCalledWith(CLOSE_CODES.forbidden, 'unauthorized-write');
-    expect(handle.doc.get('private').toString()).toBe('');
-    expect(handle.doc.get('body').toString()).toBe('');
+    expect(readHandle(handle).get('private').toString()).toBe('');
+    expect(readHandle(handle).get('body').toString()).toBe('');
     handle.release();
     denied.destroy();
     later.destroy();
@@ -332,7 +336,7 @@ describe('authorization boundaries', () => {
     const handle = await server.openRoom('notes');
 
     expect(editor.getState().refusal).toBeNull();
-    expect(handle.doc.get('constructor').toString()).toBe('allowed');
+    expect(readHandle(handle).get('constructor').toString()).toBe('allowed');
     handle.release();
   });
 
@@ -387,7 +391,7 @@ it('COLLAB-SERVER-7.4 refuses an already expired admission before replaying queu
   connection.receive(encodeSyncUpdate(encodeStateAsUpdate(writer)));
   await settle();
 
-  expect(handle.doc.get('body').toString()).toBe('');
+  expect(readHandle(handle).get('body').toString()).toBe('');
   expect(close).toHaveBeenCalledWith(CLOSE_CODES.unauthenticated, 'expired');
   handle.release();
   writer.destroy();

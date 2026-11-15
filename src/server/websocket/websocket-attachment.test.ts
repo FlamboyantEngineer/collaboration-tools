@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Doc } from '@y/y';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import { createRoomProvider, type RoomProvider } from '../../client/room-provider.js';
 import type { RoomSocketFactory } from '../../client/room-socket.js';
@@ -16,13 +16,19 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function listen(rooms: RoomServer, pingIntervalMs?: number) {
+async function listen(
+  rooms: RoomServer,
+  pingIntervalMs?: number,
+  maxBufferedBytes?: number,
+  maxPayloadBytes = 1024,
+) {
   const http: Server = createServer();
   const attachment: RoomServerAttachment = attachRoomServer(rooms, {
     server: http,
     path: '/live',
     pingIntervalMs,
-    maxPayloadBytes: 1024,
+    maxPayloadBytes,
+    maxBufferedBytes,
   });
   await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
   cleanups.push(() => new Promise<void>((resolve) => http.close(() => resolve())));
@@ -116,4 +122,49 @@ describe('attachRoomServer', () => {
 
     expect(provider.getState()).toMatchObject({ status: 'connected', syncCount: 1 });
   });
+});
+
+it('COLLAB-SERVER-6.2 drops a slow consumer before queued outgoing bytes exceed the limit', async () => {
+  const rooms = serve();
+  const { endpoint } = await listen(rooms, undefined, 1024);
+  const socket = new WebSocket(`${endpoint}/notes`);
+  await new Promise<void>((resolve) => socket.on('message', () => resolve()));
+  const closed = new Promise<number>((resolve) => socket.on('close', resolve));
+  const buffered = vi.spyOn(WebSocket.prototype, 'bufferedAmount', 'get').mockReturnValue(1024);
+  try {
+    rooms.broadcastStateless('notes', 'next frame');
+    expect(await closed).toBe(1006);
+    await waitFor(() => rooms.roomCount() === 0);
+  } finally {
+    buffered.mockRestore();
+    socket.terminate();
+  }
+});
+
+it('COLLAB-SERVER-6.2 bounds a single oversized outgoing frame', async () => {
+  const rooms = serve();
+  const { endpoint } = await listen(rooms, undefined, 1024);
+  const socket = new WebSocket(`${endpoint}/notes`);
+  await new Promise<void>((resolve) => socket.on('message', () => resolve()));
+  const closed = new Promise<number>((resolve) => socket.on('close', resolve));
+  rooms.broadcastStateless('notes', 'x'.repeat(2048));
+  expect(await closed).toBe(1006);
+  await waitFor(() => rooms.roomCount() === 0);
+});
+
+it('COLLAB-SERVER-6.2 derives the default outgoing limit from the accepted incoming frame size', async () => {
+  const rooms = serve();
+  const { endpoint } = await listen(rooms, undefined, undefined, 8 * 1024 * 1024);
+  const socket = new WebSocket(`${endpoint}/notes`);
+  await new Promise<void>((resolve) => socket.once('message', () => resolve()));
+  const largeFrame = new Promise<number>((resolve) =>
+    socket.on('message', (frame) => {
+      const length = frame.toString().length;
+      if (length > 5 * 1024 * 1024) resolve(length);
+    }),
+  );
+  rooms.broadcastStateless('notes', 'x'.repeat(5 * 1024 * 1024));
+  expect(await largeFrame).toBeGreaterThan(5 * 1024 * 1024);
+  expect(socket.readyState).toBe(WebSocket.OPEN);
+  socket.terminate();
 });

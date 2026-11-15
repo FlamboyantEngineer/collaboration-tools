@@ -13,6 +13,8 @@ export interface AttachRoomServerOptions {
   path: string;
   /** Larger frames close the socket. Defaults to 64 MiB. */
   maxPayloadBytes?: number | undefined;
+  /** Closes slow consumers before queued outgoing data exceeds this many bytes; defaults to the larger of 4 MiB and maxPayloadBytes. */
+  maxBufferedBytes?: number | undefined;
   /** Every socket is pinged this often and dropped when it missed the last pong. Defaults to 30000. */
   pingIntervalMs?: number | undefined;
   /** Defaults to the platform clock. */
@@ -30,12 +32,28 @@ function toBytes(data: RawData): Uint8Array {
   return data instanceof ArrayBuffer ? new Uint8Array(data) : data;
 }
 
-function bindSocket(socket: WebSocket, request: IncomingMessage, rooms: RoomServer) {
+function bindSocket(options: {
+  socket: WebSocket;
+  request: IncomingMessage;
+  rooms: RoomServer;
+  maxBufferedBytes: number;
+}) {
+  const { socket, request, rooms, maxBufferedBytes } = options;
   let alive = true;
   socket.on('pong', () => (alive = true));
   const connection = rooms.connect(
     {
-      send: (frame) => socket.send(frame),
+      send: (frame) => {
+        if (socket.readyState !== socket.OPEN) return;
+        if (frame.byteLength > maxBufferedBytes - socket.bufferedAmount) {
+          socket.terminate();
+          connection.closed();
+          return;
+        }
+        socket.send(frame, (error) => {
+          if (error) socket.terminate();
+        });
+      },
       close: (code, reason) => socket.close(code, reason),
     },
     { url: request.url ?? '/', headers: request.headers },
@@ -61,6 +79,11 @@ export function attachRoomServer(
   rooms: RoomServer,
   options: AttachRoomServerOptions,
 ): RoomServerAttachment {
+  const maxBufferedBytes =
+    options.maxBufferedBytes ??
+    Math.max(4 * 1024 * 1024, options.maxPayloadBytes ?? 64 * 1024 * 1024);
+  if (!Number.isSafeInteger(maxBufferedBytes) || maxBufferedBytes <= 0)
+    throw new Error('Invalid outgoing buffer limit.');
   const clock = options.clock ?? PLATFORM_CLOCK;
   const prefix = `${options.path.replace(/\/+$/, '')}/`;
   const pingIntervalMs = options.pingIntervalMs ?? 30_000;
@@ -81,7 +104,7 @@ export function attachRoomServer(
     if (!path.startsWith(prefix)) return;
     wss.handleUpgrade(request, stream, head, (socket) => {
       socket.binaryType = 'nodebuffer';
-      pings.set(socket, bindSocket(socket, request, rooms).ping);
+      pings.set(socket, bindSocket({ socket, request, rooms, maxBufferedBytes }).ping);
       socket.on('close', () => pings.delete(socket));
       timer ??= clock.setTimeout(pingAll, pingIntervalMs);
     });

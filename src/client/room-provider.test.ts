@@ -1,7 +1,12 @@
 import { Doc, encodeStateAsUpdate } from '@y/y';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createManualClock } from '../../test/manual-clock.js';
-import { connectToServer, type PairedSocket, settle } from '../../test/server-sockets.js';
+import {
+  connectToServer,
+  type PairedSocket,
+  readHandle,
+  settle,
+} from '../../test/server-sockets.js';
 import { createUnopenedSockets } from '../../test/unopened-sockets.js';
 import type { RoomAccess } from '../protocol/messages.js';
 import { readRoomGeneration } from '../protocol/room-meta.js';
@@ -68,7 +73,7 @@ function serve(
 /** The text of the room's live document on the server. */
 async function serverText(served: Served) {
   const handle = await served.server.openRoom(ROOM);
-  const content = handle.doc.get('text').toString();
+  const content = readHandle(handle).get('text').toString();
   handle.release();
   return content;
 }
@@ -387,7 +392,7 @@ describe('createRoomProvider', () => {
     lastSocket(server).drop();
     await settle();
 
-    expect(seen).toEqual({ name: 'Ada' });
+    expect(seen).toEqual({ name: 'Ada', actor: { id: 'guest' }, user: { id: 'guest' } });
     expect(afterLeave).toBe(false);
     expect([...first.awareness.getStates().keys()]).toEqual([first.awareness.clientID]);
   });
@@ -410,7 +415,11 @@ describe('createRoomProvider', () => {
     clock.advance(0);
     await settle();
 
-    expect(second.awareness.getStates().get(first.awareness.clientID)).toEqual({ name: 'Ada' });
+    expect(second.awareness.getStates().get(first.awareness.clientID)).toEqual({
+      name: 'Ada',
+      actor: { id: 'guest' },
+      user: { id: 'guest' },
+    });
     expect(sentBySecond).not.toHaveBeenCalled();
     expect(first.awareness.meta.get(first.awareness.clientID)?.clock).toBe(clockBefore + 1);
   });

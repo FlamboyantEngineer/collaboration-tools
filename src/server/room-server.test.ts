@@ -2,7 +2,7 @@ import { applyUpdate, Doc } from '@y/y';
 import * as decoding from 'lib0/decoding';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createManualClock, type ManualClock } from '../../test/manual-clock.js';
-import { connectToServer, settle } from '../../test/server-sockets.js';
+import { connectToServer, readHandle, settle } from '../../test/server-sockets.js';
 import { createRoomProvider, type RoomProvider } from '../client/room-provider.js';
 import { CLOSE_CODES } from '../protocol/messages.js';
 import type { RoomAdmission, RoomAuth, RoomPersistence } from './host/adapters.js';
@@ -242,7 +242,7 @@ describe('createRoomServer sync', () => {
     await settle();
     const handle = await context.server.openRoom('notes');
 
-    expect(text(handle.doc)).toBe('kept ');
+    expect(text(readHandle(handle))).toBe('kept ');
     expect(text(writer.doc)).toBe('kept ');
     handle.release();
   });
@@ -325,7 +325,7 @@ describe('createRoomServer awareness', () => {
     first.destroy();
     await settle();
 
-    expect(seen).toEqual({ name: 'Ada' });
+    expect(seen).toEqual({ name: 'Ada', actor: { id: 'user' }, user: { id: 'user' } });
     expect(seenLate).toBe(true);
     expect(second.awareness.getStates().has(first.awareness.clientID)).toBe(false);
   });
@@ -347,7 +347,7 @@ describe('createRoomServer awareness', () => {
     context.clock.advance(12_000);
     await settle();
 
-    expect(renewed).toEqual({ name: 'Ada L.' });
+    expect(renewed).toEqual({ name: 'Ada L.', actor: { id: 'user' }, user: { id: 'user' } });
     expect(second.awareness.getStates().has(first.awareness.clientID)).toBe(false);
   });
 
@@ -366,7 +366,11 @@ describe('createRoomServer awareness', () => {
     await settle();
 
     expect(afterDrop).toBe(false);
-    expect(second.awareness.getStates().get(first.awareness.clientID)).toEqual({ name: 'Ada' });
+    expect(second.awareness.getStates().get(first.awareness.clientID)).toEqual({
+      name: 'Ada',
+      actor: { id: 'user' },
+      user: { id: 'user' },
+    });
   });
 });
 
@@ -377,7 +381,9 @@ describe('createRoomServer host access', () => {
     await settle();
 
     const handle = await context.server.openRoom('notes');
-    handle.doc.transact(() => handle.doc.get('text').insert(0, 'from host'), 'host');
+    handle.transact({ actor: { id: 'host' }, capabilities: [] }, (doc) =>
+      doc.get('text').insert(0, 'from host'),
+    );
     await settle();
     member.destroy();
     await settle();

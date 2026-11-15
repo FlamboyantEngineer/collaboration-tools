@@ -1,10 +1,21 @@
-import type { Doc } from '@y/y';
 import type { RoomTimer } from '../protocol/clock.js';
 import { encodeAwarenessFrame } from '../protocol/frames.js';
 import { CLOSE_CODES, encodeStatelessMessage } from '../protocol/messages.js';
 import { encodeAwarenessEntries } from './awareness-owners.js';
+import type { RoomConnectionControl, RoomConnectionTarget } from './connection-control.js';
+import type { RoomConnectionLimits } from './connection-pending.js';
+import {
+  flushRooms,
+  recoverRooms,
+  type RoomFlushOptions,
+  type RoomFlushReceipt,
+  type RoomRecoveryState,
+  waitForOperation,
+} from './durable-barrier.js';
 import type { RoomHost } from './host/adapters.js';
 import { type ResolvedRoomHost, resolveRoomHost } from './host/host.js';
+import { createRoomHandle, type RoomHandle } from './room-handle.js';
+import type { RoomCommitResult, RoomSnapshot } from './room-operations.js';
 import { createRoomRegistry } from './room-registry.js';
 import {
   connectMember,
@@ -16,6 +27,10 @@ import {
 
 export interface RoomServerOptions {
   host: RoomHost;
+  /** Bounds pending admission, loading and queued frames. */
+  connectionLimits?: RoomConnectionLimits | undefined;
+  /** Maximum pending payload bytes including per-frame accounting overhead. */
+  maxPendingBytes?: number | undefined;
   /** A change is stored this long after the last one. Defaults to 2000 ms. */
   storeDebounceMs?: number | undefined;
   /** ...but never later than this after the first unstored change. Defaults to 10000 ms. */
@@ -28,31 +43,18 @@ export interface RoomServerOptions {
    * 10000 ms.
    */
   keepaliveMs?: number | undefined;
-  /**
-   * The most a connection may send before it is admitted and joined; frames wait meanwhile, each
-   * counting its length plus 64 bytes. Above it the socket closes with 1009. Defaults to 4 MiB.
-   */
-  maxPendingBytes?: number | undefined;
   /** Receives every stateless message a member sends. */
   onStateless?: ((message: RoomStatelessMessage) => void) | undefined;
-}
-
-/** A host's hold on a loaded room, to change its document directly. */
-export interface RoomHandle {
-  readonly room: string;
-  /**
-   * The room's live document. A change made here, in a transaction with an origin of the host's
-   * choosing, reaches every member and is stored like a member's.
-   */
-  readonly doc: Doc;
-  /** Lets the room unload once nothing else holds it. Releasing twice does nothing. */
-  release(): void;
 }
 
 /** Runs rooms for the connections a host passes it. */
 export interface RoomServer {
   /** Admits a connection whose socket the host accepted, and joins it to its room. */
   connect(socket: RoomServerSocket, request: RoomServerRequest): RoomServerConnection;
+  /** Immediately closes matching admitted or pending connections. */
+  revoke(target: RoomConnectionTarget): void;
+  /** Refreshes matching connections through the auth adapter. */
+  reauthorize(target: RoomConnectionTarget): Promise<void>;
   /**
    * Loads a room, or holds the loaded one, until the handle is released. Rejects when storage is
    * unavailable. A host warms a room up by opening it and releasing it later.
@@ -60,12 +62,21 @@ export interface RoomServer {
   openRoom(room: string): Promise<RoomHandle>;
   /** Sends a stateless message to every member of a loaded room. */
   broadcastStateless(room: string, payload: string): void;
+  /** Serializes a canonical commit after earlier stores, holding later checkpoints until it completes. */
+  commitRoom<T>(
+    room: string,
+    commit: (snapshot: RoomSnapshot) => Promise<RoomCommitResult<T>>,
+  ): Promise<T>;
+  /** Waits for older stores, closes members and fences old handles before the next load. */
+  invalidate(room: string): Promise<RoomRecoveryState[]>;
   /** Stores every room's pending changes now. */
-  flush(): Promise<void>;
+  flush(options?: RoomFlushOptions): Promise<RoomFlushReceipt[]>;
+  /** Snapshots of unsaved changes retained after a failed barrier or shutdown. */
+  recover(): RoomRecoveryState[];
   /** The number of rooms loaded or loading. */
   roomCount(): number;
   /** Closes every connection, stores every room and unloads it. Later connections are refused. */
-  close(): Promise<void>;
+  close(options?: RoomFlushOptions): Promise<void>;
 }
 
 const KEEPALIVE_FRAME = encodeAwarenessFrame(encodeAwarenessEntries([]));
@@ -86,10 +97,20 @@ function createRegistry(options: RoomServerOptions, host: ResolvedRoomHost) {
   });
 }
 
+function createConnectionControls(controls: Set<RoomConnectionControl>) {
+  return {
+    revoke: (target: RoomConnectionTarget) => {
+      for (const control of controls) control.revoke(target);
+    },
+    reauthorize: async (target: RoomConnectionTarget) => {
+      await Promise.all([...controls].map((control) => control.refresh(target)));
+    },
+  };
+}
+
 export function createRoomServer(options: RoomServerOptions): RoomServer {
   const host = resolveRoomHost(options.host);
   const registry = createRegistry(options, host);
-  const keepaliveMs = options.keepaliveMs ?? 10_000;
   let closed = false;
   let closing: Promise<void> | null = null;
   let keepalive: RoomTimer | null = null;
@@ -102,14 +123,16 @@ export function createRoomServer(options: RoomServerOptions): RoomServer {
     if (rooms.length > 0) startKeepalive();
   };
   const startKeepalive = () => {
-    keepalive ??= host.clock.setTimeout(sendKeepalive, keepaliveMs);
+    keepalive ??= host.clock.setTimeout(sendKeepalive, options.keepaliveMs ?? 10_000);
   };
 
   const dependencies = {
     host,
     registry,
-    onStateless: options.onStateless,
+    limits: options.connectionLimits,
     maxPendingBytes: options.maxPendingBytes ?? 4 * 1024 * 1024,
+    controls: new Set<RoomConnectionControl>(),
+    onStateless: options.onStateless,
     onJoin: () => startKeepalive(),
     connections: new Set<() => void>(),
   };
@@ -129,36 +152,43 @@ export function createRoomServer(options: RoomServerOptions): RoomServer {
       throw new Error('The room server is closed.');
     }
     startKeepalive();
-    let released = false;
-    return {
-      room,
-      doc: load.room.doc,
-      release: () => {
-        if (released) return;
-        released = true;
-        registry.release(load.room);
-      },
-    };
+    return createRoomHandle({
+      room: load.room,
+      release: () => registry.release(load.room),
+      isClosed: () => closed,
+      clock: host.clock,
+    });
   };
 
-  const close = () => {
+  const close = (options?: RoomFlushOptions) => {
     if (closing) return closing;
     closed = true;
     if (keepalive !== null) host.clock.clearTimeout(keepalive);
     for (const shutdown of [...dependencies.connections]) shutdown();
-    closing = registry.close();
+    closing = waitForOperation(registry.close(), host.clock, options).catch((error: unknown) => {
+      closing = null;
+      throw error;
+    });
     return closing;
   };
 
   return {
     connect,
+    ...createConnectionControls(dependencies.controls),
     openRoom,
+    commitRoom: (name, commit) => {
+      if (closed) return Promise.reject(new Error('The room server is closed.'));
+      return registry.commit(name, commit);
+    },
+    invalidate: (name) => {
+      if (closed) return Promise.reject(new Error('The room server is closed.'));
+      return registry.invalidate(name);
+    },
     broadcastStateless: (room, payload) => {
       registry.find(room)?.broadcast(encodeStatelessMessage(payload));
     },
-    flush: async () => {
-      await Promise.all(registry.rooms().map((room) => room.store.flush()));
-    },
+    flush: (options) => flushRooms(registry.rooms(), host.clock, options),
+    recover: () => recoverRooms(registry.rooms()),
     roomCount: () => registry.size(),
     close,
   };

@@ -4,7 +4,7 @@ import { encodeAwarenessFrame, encodeSyncUpdate } from '../protocol/frames.js';
 import { encodeStorageMessage } from '../protocol/messages.js';
 import { type AwarenessExpiry, createAwarenessExpiry } from './awareness-expiry.js';
 import { type AwarenessOwners, createAwarenessOwners } from './awareness-owners.js';
-import type { RoomActor, RoomWriteRules } from './host/adapters.js';
+import type { RoomActor, RoomWriteRules, StoredRoomVersion } from './host/adapters.js';
 import type { ResolvedRoomHost } from './host/host.js';
 import { createStoreScheduler, type StoreScheduler } from './store-scheduler.js';
 import {
@@ -38,13 +38,17 @@ export interface LiveRoom {
   readonly awareness: Awareness;
   readonly members: Set<RoomMember>;
   readonly owners: AwarenessOwners<RoomMember>;
-  /** When each presence was last renewed, on the room clock. */
   readonly presence: AwarenessExpiry;
   readonly store: StoreScheduler;
   /** The host's write rules for the room, read when it loaded. */
   readonly rules: RoomWriteRules;
-  /** The guard the rules opened on a shadow of the room, or `null`. */
   readonly guard: ShadowGuard | null;
+  /** False while a canonical operation or invalidation fences client writes. */
+  accepting: boolean;
+  version(): StoredRoomVersion | null;
+  advance(version: StoredRoomVersion): void;
+  /** Prevents any later persistence attempt from this instance. */
+  fence(): void;
   /** Notes that `actor` changed the room, for the next stored event. */
   edited(actor: RoomActor): void;
   /** Sends `frame` to every member except `except`. */
@@ -60,6 +64,7 @@ export interface LoadRoomOptions {
   name: string;
   host: ResolvedRoomHost;
   timing: StoreTiming;
+  reset?: boolean | undefined;
   /** Called once when another writer stored the room first; the room stores nothing after. */
   onConflict(room: LiveRoom): void;
 }
@@ -73,6 +78,49 @@ function removeMember(room: LiveRoom, member: RoomMember) {
   if (known.length > 0) {
     room.broadcast(encodeAwarenessFrame(encodeAwarenessUpdate(room.awareness, known)));
   }
+  for (const id of released) {
+    if (!room.awareness.getStates().has(id)) room.awareness.meta.delete(id);
+  }
+}
+
+function createRoomPresence(
+  doc: Doc,
+  host: ResolvedRoomHost,
+  broadcast: (frame: Uint8Array<ArrayBuffer>) => void,
+) {
+  const awareness = new Awareness(doc);
+  awareness.setLocalState(null);
+  clearInterval(awareness._checkInterval as ReturnType<typeof setInterval>);
+  const presence = createAwarenessExpiry({
+    clock: host.clock,
+    onExpired: (ids) => {
+      const present = ids.filter((id) => awareness.states.has(id));
+      if (present.length === 0) return;
+      removeAwarenessStates(awareness, present, 'timeout');
+      broadcast(encodeAwarenessFrame(encodeAwarenessUpdate(awareness, present)));
+    },
+  });
+  return { awareness, presence };
+}
+
+function destroyRoom(room: LiveRoom) {
+  room.store.cancel();
+  try {
+    room.guard?.destroy();
+  } finally {
+    room.presence.destroy();
+    try {
+      room.awareness.destroy();
+    } finally {
+      room.doc.destroy();
+    }
+  }
+}
+
+function createRoomRules(host: ResolvedRoomHost, name: string, doc: Doc) {
+  const rules = host.permissions.rulesFor(name) ?? {};
+  const guard = rules.openGuard ? openShadowGuard(doc, rules.openGuard) : null;
+  return { rules, guard };
 }
 
 /**
@@ -82,36 +130,24 @@ function removeMember(room: LiveRoom, member: RoomMember) {
  */
 export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
   const { name, host, timing } = options;
-  const load = await openStoredDoc(name, host);
+  const load = await openStoredDoc(name, host, options.reset);
   if (!load.ok) return load;
-  const { doc, baseRevision, newGeneration } = load.opened;
+  const { doc, baseRevision, version, newGeneration } = load.opened;
   let rules: RoomWriteRules;
   let guard: ShadowGuard | null;
   try {
-    rules = host.permissions.rulesFor(name) ?? {};
-    guard = rules.openGuard ? openShadowGuard(doc, rules.openGuard) : null;
+    ({ rules, guard } = createRoomRules(host, name, doc));
   } catch (error) {
     doc.destroy();
     return { ok: false, error: toError(error) };
   }
-  const awareness = new Awareness(doc);
-  awareness.setLocalState(null);
-  // Presence expires on the room clock instead (COLLAB-SERVER-3.4).
-  clearInterval(awareness._checkInterval as ReturnType<typeof setInterval>);
-  const presence = createAwarenessExpiry({
-    clock: host.clock,
-    onExpired: (ids) => {
-      const present = ids.filter((id) => awareness.states.has(id));
-      if (present.length === 0) return;
-      removeAwarenessStates(awareness, present, 'timeout');
-      room.broadcast(encodeAwarenessFrame(encodeAwarenessUpdate(awareness, present)));
-    },
-  });
+  const { awareness, presence } = createRoomPresence(doc, host, (frame) => room.broadcast(frame));
   const context: RoomStoreContext = {
     name,
     doc,
     host,
     baseRevision,
+    version,
     conflicted: false,
     editors: new Map(),
     onConflict: () => options.onConflict(room),
@@ -132,18 +168,23 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
     store,
     rules,
     guard,
+    accepting: true,
+    version: () => (context.version ? { ...context.version } : null),
+    advance: (next) => {
+      context.version = next;
+      context.baseRevision = next.revision;
+    },
+    fence: () => {
+      room.accepting = false;
+      context.conflicted = true;
+      store.cancel();
+    },
     edited: (actor) => {
       if (!context.editors.has(actor.id)) context.editors.set(actor.id, actor);
     },
     broadcast: (frame, except) => room.members.forEach((m) => m !== except && m.send(frame)),
     leave: (member) => removeMember(room, member),
-    destroy: () => {
-      store.cancel();
-      guard?.destroy();
-      presence.destroy();
-      awareness.destroy();
-      doc.destroy();
-    },
+    destroy: () => destroyRoom(room),
   };
   if (newGeneration) {
     recordMetric(host, { type: 'generation', room: name, reason: newGeneration });

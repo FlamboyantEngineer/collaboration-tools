@@ -109,7 +109,9 @@ describe('room events', () => {
     clock.advance(100);
     await settle();
     const handle = await server.openRoom('notes');
-    handle.doc.transact(() => handle.doc.get('text').insert(0, 'host'), 'host');
+    handle.transact({ actor: { id: 'host' }, capabilities: [] }, (doc) =>
+      doc.get('text').insert(0, 'host'),
+    );
     await settle();
     clock.advance(100);
     await settle();
@@ -121,7 +123,7 @@ describe('room events', () => {
       [],
       [{ id: 'ada' }, { id: 'bo' }],
       [{ id: 'bo' }],
-      [],
+      [{ id: 'host' }],
     ]);
     expect(stored.map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
   });
