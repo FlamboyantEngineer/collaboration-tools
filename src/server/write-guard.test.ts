@@ -1,4 +1,11 @@
-import { applyUpdate, Doc, encodeStateAsUpdate, type Transaction, type Type } from '@y/y';
+import {
+  applyUpdate,
+  Doc,
+  encodeStateAsUpdate,
+  encodeStateVector,
+  type Transaction,
+  type Type,
+} from '@y/y';
 import { describe, expect, it } from 'vitest';
 import { changeOf, largeRoom } from '../../test/room-fixtures.js';
 import type { RoomWriteChange } from './host/adapters.js';
@@ -23,14 +30,13 @@ describe('openShadowGuard', () => {
     const guard = openShadowGuard(room, () => ({
       check: ({ transaction }) => seen.push(transaction) > 0,
     }));
-    // One writer's keystrokes, each its own update, made on one copy of the room.
     const writer = new Doc();
     applyUpdate(writer, encodeStateAsUpdate(room));
-    const keystrokes: Uint8Array[] = [];
-    writer.on('update', (update: Uint8Array) => keystrokes.push(update));
-    for (let index = 0; index < 100; index++) {
+    const keystrokes = Array.from({ length: 100 }, (_, index) => {
+      const before = encodeStateVector(writer);
       (writer.get('content').get(index * 7) as Type).insert(3, 'y');
-    }
+      return encodeStateAsUpdate(writer, before);
+    });
 
     const started = performance.now();
     for (const keystroke of keystrokes) {
@@ -44,6 +50,38 @@ describe('openShadowGuard', () => {
     // Well under a millisecond per check and apply; a copy of this room takes tens of milliseconds.
     expect(perCheckMs).toBeLessThan(5);
     guard.destroy();
+    writer.destroy();
+    room.destroy();
+  });
+
+  it('COLLAB-SERVER-7.2 passes the owned candidate transaction even when observers enqueue cleanup', () => {
+    const room = new Doc();
+    room.get('body').insert(0, 'before');
+    const before = new WeakMap<Transaction, string>();
+    const guard = openShadowGuard(room, (shadow) => {
+      shadow.on('beforeTransaction', (transaction: Transaction) =>
+        before.set(transaction, shadow.get('body').toString()),
+      );
+      shadow.on('afterTransaction', (transaction: Transaction) => {
+        if (transaction.changed.size > 0) shadow.transact(() => undefined);
+      });
+      return {
+        check: ({ transaction }) => {
+          expect(before.get(transaction)).toBe('before');
+          expect(transaction.changed.size).toBeGreaterThan(0);
+          expect(transaction.doc.get('body').toString()).toBe('after before');
+          return true;
+        },
+      };
+    });
+    expect(
+      guard.check(
+        CHANGE,
+        changeOf(room, (copy) => copy.get('body').insert(0, 'after ')),
+      ),
+    ).toBe(true);
+    guard.destroy();
+    room.destroy();
   });
 
   it('COLLAB-SERVER-7.2 rebuilds the shadow from the room at the next check after a refusal', () => {

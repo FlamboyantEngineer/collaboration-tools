@@ -20,23 +20,23 @@ Verification: `src/server/room-server.test.ts`
 
 ### COLLAB-SERVER-1.3 - Failures
 
-A URL that names no room shall close the socket with `CLOSE_CODES.badRequest` (4400). When admission throws, or the room cannot load because storage, its permissions adapter or its guard fails, the server shall log it and close the socket with `CLOSE_CODES.unavailable` (1011) without an auth message, so the client keeps reconnecting. A failed room load shall release its registry entry and document, so a later attempt can load again.
+A URL that names no room shall close the socket with `CLOSE_CODES.badRequest` (4400). When admission throws, or the room cannot load because storage or its permissions adapter fails, the server shall log it and close the socket with `CLOSE_CODES.unavailable` (1011) without an auth message, so the client keeps reconnecting. A failed room load shall release its registry entry and document, so a later attempt can load again.
 
 Implementation: `src/server/server-connection.ts`, `src/server/room-registry.ts`
 Verification: `src/server/room-server.test.ts`, `src/server/authorization.test.ts`
 
-### COLLAB-SERVER-1.4 - Frames before admission
+### COLLAB-SERVER-1.4 - Pending admission limits
 
-Frames that wait for admission and the room's load shall count their length plus 64 bytes each against `maxPendingBytes` (default 4 MiB). A connection whose waiting frames pass it shall be logged and closed with 1009, the WebSocket code for a message too big to process, and its frames discarded.
+Before admission and loading finish, a connection shall retain at most 64 copied frames by default. The top-level `maxPendingBytes` (default 4 MiB) caps each frame's byte length plus 64 bytes of queue overhead. Exceeding either cap logs a warning and closes with 1009 and reason `too-large`. `connectionLimits` may set the positive safe integer frame count cap and separate admission/loading deadlines, defaulting to 10000/30000 milliseconds. The byte cap must also be a positive safe integer. A deadline closes the connection as unavailable with reason `admission-timeout`. Closure discards pending frames and cancels timers; late admission results cannot join, and late loaded rooms are released.
 
-Implementation: `src/server/server-connection.ts`, `src/server/room-server.ts`
-Verification: `src/server/room-server.test.ts`
+Implementation: `src/server/server-connection.ts`, `src/server/connection-pending.ts`, `src/server/connection-types.ts`
+Verification: `src/server/server-connection.test.ts`
 
 ## COLLAB-SERVER-2 - Sync
 
 ### COLLAB-SERVER-2.1 - Relaying changes
 
-The server shall answer a sync step 1 with a sync step 2 and apply sync step 2 and update messages from a read-write connection, with the connection as the transaction origin. Every change to a room's document, from a member or from a host handle, shall be sent to every member, its sender included: that echo is how a client learns the room holds its change.
+The server shall answer a sync step 1 with a sync step 2 and apply sync step 2 and update messages from a read-write connection, with an authenticated transaction origin containing actor, capabilities and source. Every change to a room's document, from a member or from a host handle, shall be sent to every member, its sender included: that echo is how a client learns the room holds its change.
 
 Implementation: `src/server/member-frames.ts`, `src/server/live-room.ts`
 Verification: `src/server/room-server.test.ts`
@@ -92,6 +92,13 @@ A presence its client has not renewed for 30 s, measured on the host's `clock`, 
 Implementation: `src/server/awareness-expiry.ts`, `src/server/live-room.ts`, `src/server/member-frames.ts`
 Verification: `src/server/room-server.test.ts`
 
+### COLLAB-SERVER-3.5 - Authenticated and bounded presence
+
+Awareness states shall be JSON objects or null removals, with safe integer ids and clocks, no trailing bytes, at most 64 entries and 64 KiB per update, and at most 16 KiB of JSON per state. Each connection may own at most 16 client ids and each room retain metadata for at most 1024 client ids. Ownership budgets are released on disconnect, and metadata for removed released states is pruned after broadcasting removal, so reconnect churn cannot exhaust a room for its lifetime. The server shall replace the reserved `actor` field with the authenticated actor, and by default also replace `user` with that actor. Other fields remain untrusted client content. A host may normalize or reject custom fields through `host.awareness.normalize`; exceptions, null results and malformed or oversized states close the sender as bad-request. The wire encoding stays unchanged.
+
+Implementation: `src/server/awareness-owners.ts`, `src/server/member-frames.ts`, `src/server/host/awareness-policy.ts`
+Verification: `src/server/awareness-owners.test.ts`, `src/server/server-connection.test.ts`
+
 ## COLLAB-SERVER-4 - Storage
 
 ### COLLAB-SERVER-4.1 - Loading
@@ -124,7 +131,7 @@ Verification: `src/server/room-storage.test.ts`
 
 ### COLLAB-SERVER-4.5 - Shutdown
 
-`close()` shall close every connection, including those awaiting admission or room loading, with `CLOSE_CODES.shutdown` (1001), store every room once more, logging a room whose changes could not be stored, and unload them all. Later connections shall be closed with `CLOSE_CODES.shutdown`, and `openRoom` shall reject, including a handle still loading when shutdown begins. Every concurrent `close()` shall wait for the same shutdown to complete. `flush()` shall store every room's pending changes now.
+`close()` shall close every connection, including those awaiting admission or loading, refuse later work, and store all pending changes. It resolves only after every room is durable and unloaded. A failed store rejects shutdown and retains the room and its retry state; `recover()` returns detached snapshots and `close()` may be retried. Concurrent calls wait for the same attempt. Handles cannot mutate after shutdown begins. `flush()` starts pending stores and rejects when an attempt fails; supplying a signal or timeout waits through retries, without discarding changes when the wait ends.
 
 Implementation: `src/server/room-server.ts`, `src/server/room-registry.ts`
 Verification: `src/server/room-storage.test.ts`
@@ -133,9 +140,9 @@ Verification: `src/server/room-storage.test.ts`
 
 ### COLLAB-SERVER-5.1 - Room handles
 
-`openRoom(room)` shall load the room, or hold the loaded one, and resolve to a handle with its live document, rejecting when storage is unavailable. A change made on the handle's document shall reach every member and be stored like a member's. The room shall stay loaded until every handle is released; releasing a handle twice does nothing. A host warms a room up by opening it and releasing it later.
+`openRoom(room)` shall hold a loaded room until release. A handle exposes a detached full-state `snapshot()` and `transact({ actor, capabilities }, mutate)`. Mutations run on a detached candidate, pass the room capability rules and additional guard, and only then reach the live room with authenticated attribution. Server-only types may be edited by the host, subject to its remaining capability rules and guard; the library generation remains reserved. A retained candidate cannot mutate the live room. A released or fenced handle cannot write.
 
-Implementation: `src/server/room-server.ts`, `src/server/room-registry.ts`
+Implementation: `src/server/room-server.ts`, `src/server/room-registry.ts`, `src/server/room-handle.ts`
 Verification: `src/server/room-server.test.ts`
 
 ### COLLAB-SERVER-5.2 - Stateless messages
@@ -165,6 +172,8 @@ Verification: `src/server/websocket/websocket-attachment.test.ts`
 
 A text frame shall close the socket with `CLOSE_CODES.badRequest`, and a frame larger than `maxPayloadBytes` (default 64 MiB) shall close it with 1009. Every socket shall be pinged every `pingIntervalMs` (default 30000) and dropped when it did not answer the previous ping.
 
+The attachment shall terminate a slow consumer before an outbound frame would bring `bufferedAmount` above `maxBufferedBytes` (default the larger of 4 MiB and `maxPayloadBytes`, normally 64 MiB), including a single oversized outbound frame. Closed sockets receive no further sends; termination releases room membership. The buffer limit must be a positive safe integer. It includes each full welcome snapshot, so hosts with larger snapshots must configure a correspondingly larger outbound limit; a smaller explicit limit intentionally rejects larger outbound frames.
+
 Implementation: `src/server/websocket/websocket-attachment.ts`
 Verification: `src/server/websocket/websocket-attachment.test.ts`
 
@@ -179,7 +188,7 @@ Verification: `src/server/update-changes.test.ts`
 
 ### COLLAB-SERVER-7.2 - Write rules
 
-`host.permissions.rulesFor(room)` shall give a room its `RoomWriteRules` when it loads. A changed top-level type in `serverOnly`, or the room metadata type (COLLAB-PROTOCOL-3.1) in every room, shall refuse the update; otherwise the type shall need the capability `required` names for it, or `otherwise` when it has no own entry in `required`, or nothing beyond read-write access. When the lists allow the change, the rules' `check(change)` shall decide, with the room, actor, capabilities and changes, and then the room's guard. When the rules give `openGuard`, the room shall call it once as it loads, with a shadow copy of the room's document that the server keeps in step with every change the room takes, the host's room handles included; an `openGuard` that throws shall fail the load. Each update the lists and `check` allow shall be applied to the shadow first, and the guard's `check(change)` shall decide with the shadow's transaction that applied it, so a guard may keep its own reading of the room from its seed. A refused update leaves the shadow stale: the server shall rebuild it from the room and reopen the guard at the room's next guarded update, and refuse that update when reopening throws. A `check` that throws, the rules' or the guard's, shall refuse. Deciding by the lists, by `check` or by a guard shall cost about the update's own size, not the room's: about as much in a room of a megabyte as in an empty one. Only a refusal by the guard copies the room. A refused update shall not be applied: the server shall log it, send an auth denied message with `unauthorized-write` and close the socket with `CLOSE_CODES.forbidden`, and stop processing the remainder of that frame. The host's room handles are not checked.
+`host.permissions.rulesFor(room)` shall give a room its `RoomWriteRules` when it loads. A changed top-level type in `serverOnly`, or the room metadata type (COLLAB-PROTOCOL-3.1) in every room, shall refuse the update; otherwise the type shall need the capability `required` names for it, or `otherwise` when it has no own entry in `required`, or nothing beyond read-write access. When the lists allow the change, the rules' `check(change)` shall decide, with the room, actor, capabilities and changes, and then the room's guard. When the rules give `openGuard`, the room shall call it once as it loads, with a shadow copy of the room's document that the server keeps in step with every change the room takes, the host's room handles included; an `openGuard` that throws shall fail the load. Each update the lists and `check` allow shall be applied to the shadow first, and the guard's `check(change)` shall decide with the shadow's transaction that applied it, so a guard may keep its own reading of the room from its seed. A refused update leaves the shadow stale: the server shall rebuild it from the room and reopen the guard at the room's next guarded update, and refuse that update when reopening throws. A `check` that throws, the rules' or the guard's, shall refuse. Deciding by the lists, by `check` or by a guard shall cost about the update's own size, not the room's: about as much in a room of a megabyte as in an empty one. Only a refusal by the guard copies the room. A refused update shall not be applied: the server shall log it, send an auth denied message with `unauthorized-write` and close the socket with `CLOSE_CODES.forbidden`, and stop processing the remainder of that frame. Attributed host transactions pass the same finer check and guard; only server-only roots are exempt from the client restriction.
 
 Implementation: `src/server/write-rules.ts`, `src/server/write-guard.ts`, `src/server/member-frames.ts`, `src/server/server-connection.ts`, `src/server/live-room.ts`, `src/server/host/adapters.ts`, `src/server/host/host.ts`
 Verification: `src/server/authorization.test.ts`, `src/server/write-rules.test.ts`, `src/server/write-guard.test.ts`, `src/server/host/host.test.ts`
@@ -197,6 +206,13 @@ When admission gives an `expiresAt`, the server shall call `host.auth.refresh` w
 
 Implementation: `src/server/reauthorization.ts`, `src/server/server-connection.ts`
 Verification: `src/server/authorization.test.ts`
+
+### COLLAB-SERVER-7.5 - Targeted authorization controls
+
+`revoke(target)` shall immediately refuse matching active connections with forbidden and reason `revoked`. `reauthorize(target)` shall await fresh decisions from the auth adapter and apply access and capabilities before accepting further frames. Targets match the intersection of optional canonical room, actor id and authenticated session id; an empty target selects all. For connections already awaiting admission, revocation targets shall be retained until the authenticated actor, session and canonical room are known, and enforced before room loading or queued-frame replay. New connections created after the call consult authentication normally. Reauthorization also records targets for unresolved admissions; a selected connection not yet joined closes with unavailable and reason `reauthorization-required`, before loading or replay, so reconnect obtains a fresh admission. Missing refresh support, refresh errors and changed actor id, canonical room or session id shall close the selected connection. A manual refresh shall finish within 10 seconds or the current admission expiry, whichever is earlier, and closure shall cancel the wait. Results after closure are ignored. Existing scheduled refresh results are superseded by manual refresh.
+
+Implementation: `src/server/connection-control.ts`, `src/server/connection-lifecycle.ts`, `src/server/server-connection.ts`, `src/server/room-server.ts`
+Verification: `src/server/server-connection.test.ts`
 
 ## COLLAB-SERVER-8 - Durability
 
@@ -237,7 +253,7 @@ Verification: `src/server/durability.test.ts`
 
 ### COLLAB-SERVER-8.6 - Room events
 
-The server shall pass `host.events.emit` an event, naming the room by its canonical name, when a room loads (`loaded`, after it stores a new generation), a connection joins it (`joined`, with its actor and access), a joined connection leaves it (`left`, with its actor), a store succeeds (`stored`, with the stored revision and sequence and the actors whose changes that state is the first to hold, in the order they first changed the room since the last stored state), another writer stores it first (`conflicted`) and it unloads (`unloaded`). A failed store's actors shall carry over to the store that follows, and changes made through a room handle shall name no actor. The server shall not wait for a listener: one that throws or whose promise rejects shall change nothing and be logged as a warning.
+The server shall pass `host.events.emit` an event, naming the room by its canonical name, when a room loads (`loaded`, after it stores a new generation), a connection joins it (`joined`, with its actor and access), a joined connection leaves it (`left`, with its actor), a store succeeds (`stored`, with the stored revision and sequence and the actors whose changes that state is the first to hold, in the order they first changed the room since the last stored state), another writer stores it first (`conflicted`) and it unloads (`unloaded`). A failed store's actors shall carry over to the store that follows, and changes made through a room handle shall carry their supplied actor. The server shall not wait for a listener: one that throws or whose promise rejects shall change nothing and be logged as a warning.
 
 Implementation: `src/server/stored-room.ts`, `src/server/live-room.ts`, `src/server/room-registry.ts`, `src/server/server-connection.ts`, `src/server/member-frames.ts`, `src/server/host/adapters.ts`
 Verification: `src/server/room-events.test.ts`
@@ -250,3 +266,33 @@ The `./server` entry point shall import no Node built-in module and not `ws`, so
 
 Implementation: `src/server/stored-room.ts`, `src/server/websocket/index.ts`, `scripts/check-structure.mjs`
 Verification: `src/server/browser-entries.test.ts`
+
+## COLLAB-SERVER-10 - Durable host operations
+
+### COLLAB-SERVER-10.1 - Explicit durability failures and recovery
+
+Public room and server flush return per-room receipts naming the durable generation and version. They and shutdown never report success for unstored changes. Flush and shutdown accept abort and deadline options. These end only the wait and detach its listeners and waiter; retries continue and dirty snapshots remain recoverable. A shutdown that failed can be retried after storage recovers. No host mutation is accepted once shutdown begins.
+
+Implementation: `src/server/durable-barrier.ts`, `src/server/room-registry.ts`, `src/server/store-scheduler.ts`, `src/server/room-server.ts`
+Verification: `src/server/host-contracts.test.ts`
+
+### COLLAB-SERVER-10.2 - Serialized canonical commits
+
+`commitRoom(room, commit)` serializes canonical commits and checkpoint storage per room. It finishes older stores, captures a detached snapshot with its generation and stored version, and holds later stores until the callback resolves. The callback returns `{ value, version }`; that version becomes the base of the next checkpoint before storage resumes. Collaborators stay connected and may edit during the callback; their later changes remain dirty and persist against the returned version. Failed callbacks leave the existing base unchanged. The callback must atomically commit its canonical state and returned version, and must not call another serialized operation on the same room.
+
+Implementation: `src/server/room-operations.ts`, `src/server/store-scheduler.ts`, `src/server/live-room.ts`, `src/server/stored-room.ts`
+Verification: `src/server/host-contracts.test.ts`
+
+### COLLAB-SERVER-10.3 - Generation invalidation
+
+`invalidate(room)` serializes behind earlier canonical operations, closes members, prevents old handles from writing, waits for in-flight stores, cancels later stores and returns any unsaved snapshot. The next load starts a new generation from the host seed, replacing the latest stored version. Admission already loading the invalidated instance cannot join it. Clients retain responsibility for recovering edits from a refused old generation.
+
+Implementation: `src/server/room-operations.ts`, `src/server/room-registry.ts`, `src/server/stored-room.ts`, `src/server/live-room.ts`, `src/server/server-connection.ts`
+Verification: `src/server/host-contracts.test.ts`
+
+### COLLAB-SERVER-10.4 - Guard lifecycle and atomic attribution
+
+`RoomWriteRules.openGuard(shadow)` opens a synchronous preapply guard on a persistent room shadow. Its `check` receives the authenticated actor, capabilities, changed roots and candidate transaction, and runs in addition to ordinary capability rules. False or exceptions reject without broadcast or persistence. Unload destroys the guard. Host candidates use the same guard and carry attribution into the transaction origin and the atomic persistence context, including actors, generation and reason. The context is captured with the snapshot, before asynchronous persistence begins.
+
+Implementation: `src/server/host/adapters.ts`, `src/server/room-mutations.ts`, `src/server/write-rules.ts`, `src/server/live-room.ts`, `src/server/stored-room.ts`, `src/server/room-handle.ts`
+Verification: `src/server/host-contracts.test.ts`

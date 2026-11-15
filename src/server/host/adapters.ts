@@ -6,6 +6,7 @@
 import type { Doc, Transaction } from '@y/y';
 import type { RoomClock } from '../../protocol/clock.js';
 import type { RoomAccess } from '../../protocol/messages.js';
+import type { RoomAwareness } from './awareness-policy.js';
 
 /** The person or service behind a connection. */
 export interface RoomActor {
@@ -33,6 +34,8 @@ export type RoomAdmission =
   | {
       ok: true;
       actor: RoomActor;
+      /** Optional authenticated session identifier for targeted revocation. */
+      sessionId?: string | undefined;
       access: RoomAccess;
       /**
        * The room's canonical name, when the client named it by an alias. Every alias of a room
@@ -77,17 +80,14 @@ export interface RoomWriteChange {
   changes: ReadonlyMap<string, ReadonlySet<string | null>>;
 }
 
-/** A change as a room's guard sees it: already applied to the guard's shadow document. */
+/** A candidate applied to a persistent shadow document before acceptance. */
 export interface RoomGuardedChange extends RoomWriteChange {
-  /** The shadow's transaction that applied the update. */
   transaction: Transaction;
 }
 
-/** A room's guard, opened once on a shadow document the library keeps in step with the room. */
+/** A room-scoped validator observing a persistent shadow. */
 export interface RoomWriteGuard {
-  /** Decides on a change the lists and `check` allow; `false` refuses it. */
   check(change: RoomGuardedChange): boolean;
-  /** Stops observing the shadow, which the library then destroys. */
   destroy?(): void;
 }
 
@@ -99,13 +99,9 @@ export interface RoomWriteRules {
   serverOnly?: readonly string[] | undefined;
   /** The capability a type neither list names needs. By default, read-write access is enough. */
   otherwise?: string | undefined;
-  /** A finer check of a change the lists allow, from the changes alone; `false` refuses it. */
+  /** A finer check of a change the lists allow; `false` refuses it. */
   check?: ((change: RoomWriteChange) => boolean) | undefined;
-  /**
-   * Opens the room's guard when it loads, on a shadow copy of the room that holds every change
-   * the room took. The guard may observe the shadow; each candidate update is applied to it before
-   * the guard decides. A guarded room holds its document twice.
-   */
+  /** Opens a validator on a shadow that holds every accepted room change. */
   openGuard?: ((shadow: Doc) => RoomWriteGuard) | undefined;
 }
 
@@ -145,6 +141,13 @@ export type RoomLoadResult =
 /** How a load's outcome is named in metrics. */
 export type RoomLoadOutcome = RoomLoadResult['status'];
 
+/** Attribution stored atomically with a room snapshot. */
+export interface RoomCommitContext {
+  actors: readonly RoomActor[];
+  generation: string | null;
+  reason: string;
+}
+
 export interface RoomStoreInput {
   room: string;
   /** A Yjs update that rebuilds the room's document from empty. */
@@ -154,6 +157,8 @@ export interface RoomStoreInput {
    * fails with `conflict` when the room's current revision is a different one.
    */
   baseRevision: string | null;
+  /** Captured with the update; never inferred from asynchronous events. */
+  context?: RoomCommitContext | undefined;
 }
 
 export type RoomStoreResult =
@@ -217,7 +222,7 @@ export type RoomEvent =
       sequence: number;
       /**
        * Each actor whose change this state is the first to hold, in the order they first changed
-       * the room. Changes made through a room handle name no actor.
+       * the room, including attributed changes made through a room handle.
        */
       editors: readonly RoomActor[];
     }
@@ -243,6 +248,8 @@ export interface RoomLogger {
 /** Everything a host passes to run rooms. */
 export interface RoomHost {
   auth: RoomAuth;
+  /** Defaults to replacing user and actor with authenticated identity. */
+  awareness?: RoomAwareness | undefined;
   persistence: RoomPersistence;
   /** Defaults to no rules beyond each connection's access. */
   permissions?: RoomPermissions | undefined;

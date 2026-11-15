@@ -56,3 +56,44 @@ it('COLLAB-SERVER-2.4 rejects an impossible awareness count before allocating it
   const update = encoding.encode((encoder) => encoding.writeVarUint(encoder, 2 ** 32));
   expect(() => decodeAwarenessEntries(update)).toThrow('awareness');
 });
+
+it('COLLAB-SERVER-3.5 rejects malformed, trailing and oversized awareness states', () => {
+  for (const state of [
+    '[]',
+    '1',
+    'true',
+    '"text"',
+    '{',
+    JSON.stringify({ text: 'x'.repeat(17 * 1024) }),
+  ]) {
+    expect(() =>
+      decodeAwarenessEntries(encodeAwarenessEntries([{ clientId: 1, clock: 1, state }])),
+    ).toThrow();
+  }
+  const update = encodeAwarenessEntries([entry(1, 1, {})]);
+  expect(() => decodeAwarenessEntries(new Uint8Array([...update, 0]))).toThrow('Trailing');
+  expect(() => decodeAwarenessEntries(new Uint8Array(65 * 1024))).toThrow('limit');
+});
+
+it('COLLAB-SERVER-3.5 bounds owned client ids and releases the budget after disconnect', () => {
+  const owners = createAwarenessOwners<string>();
+  for (let clientId = 0; clientId < 16; clientId += 1)
+    owners.claim('a', [entry(clientId, 1, {})], () => 0);
+  expect(() => owners.claim('a', [entry(17, 1, {})], () => 0)).toThrow('budget');
+  expect(owners.release('a')).toHaveLength(16);
+  expect(owners.claim('a', [entry(17, 1, {})], () => 0)).toHaveLength(1);
+});
+
+it('COLLAB-SERVER-3.5 bounds the room-wide active awareness client budget', () => {
+  const owners = createAwarenessOwners<number>();
+  for (let owner = 0; owner < 64; owner += 1) {
+    owners.claim(
+      owner,
+      Array.from({ length: 16 }, (_, index) => entry(owner * 16 + index, 1, {})),
+      () => 0,
+    );
+  }
+  expect(() => owners.claim(65, [entry(1024, 1, {})], () => 0)).toThrow('budget');
+  owners.release(0);
+  expect(owners.claim(65, [entry(1024, 1, {})], () => 0)).toHaveLength(1);
+});

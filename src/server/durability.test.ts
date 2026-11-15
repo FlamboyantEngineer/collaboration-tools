@@ -1,7 +1,7 @@
 import { applyUpdate, Doc, encodeStateAsUpdate, encodeStateVector } from '@y/y';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createManualClock } from '../../test/manual-clock.js';
-import { connectToServer, settle } from '../../test/server-sockets.js';
+import { connectToServer, readHandle, settle } from '../../test/server-sockets.js';
 import { createRoomProvider, type RoomProvider } from '../client/room-provider.js';
 import { CLOSE_CODES, type RoomSaveStatus } from '../protocol/messages.js';
 import { GENERATION_KEY, readRoomGeneration, ROOM_META_TYPE } from '../protocol/room-meta.js';
@@ -100,12 +100,12 @@ describe('room generations', () => {
     const member = open();
     await settle();
     const handle = await server.openRoom('notes');
-    const generation = readRoomGeneration(handle.doc);
+    const generation = readRoomGeneration(readHandle(handle));
 
     member.doc.get(ROOM_META_TYPE).setAttr(GENERATION_KEY, 'forged');
     await settle();
 
-    expect(readRoomGeneration(handle.doc)).toBe(generation);
+    expect(readRoomGeneration(readHandle(handle))).toBe(generation);
     expect(member.getState().refusal).toBe('unauthorized-write');
     handle.release();
   });

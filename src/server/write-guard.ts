@@ -18,16 +18,16 @@ function copyOf(doc: Doc): Doc {
   return copy;
 }
 
-function applyCapturing(doc: Doc, update: Uint8Array): Transaction | null {
-  let transaction: Transaction | null = null;
-  const capture = (applied: Transaction) => (transaction = applied);
-  doc.on('afterTransaction', capture);
-  try {
-    applyUpdate(doc, update);
-  } finally {
-    doc.off('afterTransaction', capture);
-  }
-  return transaction;
+function applyCapturing(doc: Doc, update: Uint8Array): Transaction {
+  // Own the primary transaction: observers may queue additional cleanup transactions.
+  return doc.transact(
+    (transaction) => {
+      applyUpdate(doc, update);
+      return transaction;
+    },
+    null,
+    false,
+  );
 }
 
 /**
@@ -62,10 +62,9 @@ export function openShadowGuard(room: Doc, open: (shadow: Doc) => RoomWriteGuard
   function decide(change: RoomWriteChange, update: Uint8Array): boolean {
     const { shadow, guard } = opened ?? reopen();
     const transaction = applyCapturing(shadow, update);
-    return transaction !== null && guard.check({ ...change, transaction });
+    return guard.check({ ...change, transaction });
   }
 
-  // Every change the room takes reaches the shadow; one the shadow holds already changes nothing.
   const follow = (update: Uint8Array) => {
     if (opened) applyUpdate(opened.shadow, update);
   };
@@ -81,7 +80,7 @@ export function openShadowGuard(room: Doc, open: (shadow: Doc) => RoomWriteGuard
       close();
       return false;
     },
-    destroy() {
+    destroy: () => {
       room.off('update', follow);
       close();
     },

@@ -7,6 +7,7 @@ import type {
   RoomPermissions,
   RoomSeeds,
 } from './adapters.js';
+import type { RoomAwareness } from './awareness-policy.js';
 
 /** A {@link RoomHost} with every optional adapter filled in. */
 export type ResolvedRoomHost = { [Key in keyof RoomHost]-?: NonNullable<RoomHost[Key]> };
@@ -29,10 +30,15 @@ export const NO_METRICS: RoomMetrics = Object.freeze({ record: () => undefined }
 /** Events that nothing listens to. */
 export const NO_EVENTS: RoomEvents = Object.freeze({ emit: () => undefined });
 
+const DEFAULT_AWARENESS: RoomAwareness = {
+  normalize: ({ state, actor }) => ({ ...state, user: actor }),
+};
+
 /** Fills in the adapters a host left out with their defaults. */
 export function resolveRoomHost(host: RoomHost): ResolvedRoomHost {
   return {
     auth: host.auth,
+    awareness: host.awareness ?? DEFAULT_AWARENESS,
     persistence: host.persistence,
     permissions: host.permissions ?? NO_PERMISSIONS,
     seeds: host.seeds ?? EMPTY_SEEDS,

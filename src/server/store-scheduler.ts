@@ -24,6 +24,7 @@ export interface StoreScheduler {
   markDirty(): void;
   /** Whether some change is not stored yet. */
   isDirty(): boolean;
+  isEnded(): boolean;
   status(): RoomSaveStatus;
   /** Stores pending changes now and resolves once no store is running, stored or not. */
   flush(): Promise<void>;
@@ -31,11 +32,13 @@ export interface StoreScheduler {
    * Resolves `true` once every change recorded so far is stored, or `false` once a store is
    * abandoned or the scheduler cancelled first. It starts no store of its own.
    */
-  whenStored(): Promise<boolean>;
+  whenStored(signal?: AbortSignal): Promise<boolean>;
   /** Stores pending changes now and waits, retrying as long as storage fails, as `whenStored`. */
-  drain(): Promise<boolean>;
+  drain(signal?: AbortSignal): Promise<boolean>;
   /** Drops pending changes and timers; nothing is stored after. */
   cancel(): void;
+  /** Runs a host commit after earlier stores finish, suspending later stores. */
+  exclusive<T>(operation: () => Promise<T>): Promise<T>;
 }
 
 interface Waiter {
@@ -48,7 +51,24 @@ interface Waiter {
 function createWaiters() {
   const waiting: Waiter[] = [];
   return {
-    add: (version: number) => new Promise<boolean>((resolve) => waiting.push({ version, resolve })),
+    add: (version: number, signal?: AbortSignal) =>
+      new Promise<boolean>((resolve) => {
+        const waiter: Waiter = {
+          version,
+          resolve: (stored) => {
+            signal?.removeEventListener('abort', abort);
+            resolve(stored);
+          },
+        };
+        const abort = () => {
+          const index = waiting.indexOf(waiter);
+          if (index >= 0) waiting.splice(index, 1);
+          waiter.resolve(false);
+        };
+        if (signal?.aborted) return abort();
+        waiting.push(waiter);
+        signal?.addEventListener('abort', abort, { once: true });
+      }),
     /** Resolves the waiters `storedVersion` covers, or every waiter, `false`, once `ended`. */
     settle: (storedVersion: number, ended: boolean) => {
       for (const waiter of [...waiting]) {
@@ -76,94 +96,180 @@ function createTimer(clock: RoomClock) {
   };
 }
 
-export function createStoreScheduler(options: StoreSchedulerOptions): StoreScheduler {
-  const { clock } = options;
-  // Every change bumps `version`; a store covers the changes made before it started.
-  let version = 0;
-  let storedVersion = 0;
-  // Set once a store is abandoned or the scheduler cancelled.
-  let ended = false;
+function createDirtyTimer(
+  options: StoreSchedulerOptions,
+  schedule: (delay: number) => void,
+  active: () => boolean,
+) {
   let firstDirtyAt: number | null = null;
-  const timer = createTimer(clock);
-  let running: Promise<StoreOutcome> | null = null;
-  let retrying = false;
-  let retryDelay = options.retryInitialMs;
-  let status: RoomSaveStatus = 'saved';
-  const waiters = createWaiters();
-
-  const isDirty = () => version > storedVersion;
-  const updateStatus = () => {
-    const next = running ? 'saving' : !isDirty() ? 'saved' : retrying ? 'retrying' : 'unsaved';
-    if (next === status) return;
-    status = next;
-    options.onStatus?.(next);
+  return {
+    reset: () => {
+      firstDirtyAt = null;
+    },
+    mark: () => {
+      const now = options.clock.now();
+      firstDirtyAt ??= now;
+      if (!active())
+        schedule(
+          Math.max(0, Math.min(options.debounceMs, firstDirtyAt + options.maxDebounceMs - now)),
+        );
+    },
   };
-  const schedule = (delayMs: number) => timer.set(() => void flush(), delayMs);
+}
 
-  const run = async (): Promise<StoreOutcome> => {
-    const covered = version;
-    firstDirtyAt = null;
+function createExclusive(options: {
+  pause(): void;
+  resume(): void;
+  running(): Promise<StoreOutcome> | null;
+}) {
+  return async <T>(operation: () => Promise<T>): Promise<T> => {
+    options.pause();
+    try {
+      while (options.running()) await options.running();
+      return await operation();
+    } finally {
+      options.resume();
+    }
+  };
+}
+
+interface SchedulerState {
+  paused: number;
+  version: number;
+  storedVersion: number;
+  ended: boolean;
+  running: Promise<StoreOutcome> | null;
+  retrying: boolean;
+  retryDelay: number;
+}
+
+function createStoreAttempt(
+  state: SchedulerState,
+  options: StoreSchedulerOptions,
+  callbacks: {
+    reset(): void;
+    schedule(delay: number): void;
+    settle(version: number, ended: boolean): void;
+  },
+) {
+  return async (): Promise<StoreOutcome> => {
+    const covered = state.version;
+    callbacks.reset();
     const outcome = await options.store();
-    retrying = !ended && outcome === 'retry';
-    if (!ended && outcome === 'stored') {
-      storedVersion = Math.max(storedVersion, covered);
-      retryDelay = options.retryInitialMs;
-    } else if (!ended && outcome === 'retry') {
-      schedule(retryDelay);
-      retryDelay = Math.min(retryDelay * 2, options.retryMaxMs);
-    } else ended = true;
-    waiters.settle(storedVersion, ended);
+    state.retrying = !state.ended && outcome === 'retry';
+    if (!state.ended && outcome === 'stored') {
+      state.storedVersion = Math.max(state.storedVersion, covered);
+      state.retryDelay = options.retryInitialMs;
+    } else if (!state.ended && outcome === 'retry') {
+      callbacks.schedule(state.retryDelay);
+      state.retryDelay = Math.min(state.retryDelay * 2, options.retryMaxMs);
+    } else state.ended = true;
+    callbacks.settle(state.storedVersion, state.ended);
     return outcome;
   };
+}
 
-  // Stores changes made meanwhile too, one store at a time even if another flush starts one.
+function createSaveStatus(state: SchedulerState, onStatus: StoreSchedulerOptions['onStatus']) {
+  let status: RoomSaveStatus = 'saved';
+  return {
+    read: () => status,
+    update: () => {
+      const next: RoomSaveStatus = state.running
+        ? 'saving'
+        : state.version <= state.storedVersion
+          ? 'saved'
+          : state.retrying
+            ? 'retrying'
+            : 'unsaved';
+      if (next === status) return;
+      status = next;
+      onStatus?.(next);
+    },
+  };
+}
+
+export function createStoreScheduler(options: StoreSchedulerOptions): StoreScheduler {
+  const { clock } = options;
+  const state: SchedulerState = {
+    paused: 0,
+    version: 0,
+    storedVersion: 0,
+    ended: false,
+    running: null,
+    retrying: false,
+    retryDelay: options.retryInitialMs,
+  };
+  const timer = createTimer(clock);
+  const saveStatus = createSaveStatus(state, options.onStatus);
+  const waiters = createWaiters();
+
+  const isDirty = () => state.version > state.storedVersion;
+  const updateStatus = saveStatus.update;
+  const schedule = (delayMs: number) => timer.set(() => void flush(), delayMs);
+  const dirtyTimer = createDirtyTimer(
+    options,
+    schedule,
+    () => state.running !== null || state.retrying || state.paused > 0,
+  );
+
+  const run = createStoreAttempt(state, options, {
+    reset: dirtyTimer.reset,
+    schedule,
+    settle: waiters.settle,
+  });
+
+  // Changes made while a store runs are stored by the same flush, one store after another.
   const flush = async (): Promise<void> => {
     timer.clear();
     for (let first = true; ; first = false) {
-      while (running) await running;
-      if (!isDirty() || ended || (!first && retrying)) return;
-      running = run();
+      while (state.running) await state.running;
+      if (!isDirty() || state.ended || state.paused > 0 || (!first && state.retrying)) return;
+      state.running = run();
       updateStatus();
-      // A failed store ends the loop at the next check: its retry or the end covers the rest.
-      await running.finally(() => {
-        running = null;
+      await state.running.finally(() => {
+        state.running = null;
         updateStatus();
       });
     }
   };
 
-  const whenStored = (): Promise<boolean> =>
-    isDirty() && !ended ? waiters.add(version) : Promise.resolve(!isDirty());
+  const whenStored = (signal?: AbortSignal): Promise<boolean> =>
+    isDirty() && !state.ended ? waiters.add(state.version, signal) : Promise.resolve(!isDirty());
 
   const markDirty = () => {
-    version += 1;
-    if (ended) return;
-    const now = clock.now();
-    firstDirtyAt ??= now;
-    // A running store's flush stores this change next; a failed store's retry timer covers it.
-    if (!running && !retrying) {
-      schedule(
-        Math.max(0, Math.min(options.debounceMs, firstDirtyAt + options.maxDebounceMs - now)),
-      );
-    }
+    state.version += 1;
+    if (state.ended) return;
+    dirtyTimer.mark();
     updateStatus();
   };
 
   return {
+    exclusive: createExclusive({
+      pause: () => {
+        state.paused += 1;
+        timer.clear();
+      },
+      running: () => state.running,
+      resume: () => {
+        state.paused -= 1;
+        if (isDirty() && !state.ended && state.paused === 0) schedule(0);
+      },
+    }),
     markDirty,
     isDirty,
-    status: () => status,
+    isEnded: () => state.ended,
+    status: saveStatus.read,
     flush,
     whenStored,
-    drain: () => {
-      const stored = whenStored();
+    drain: (signal) => {
+      const stored = whenStored(signal);
       void flush();
       return stored;
     },
     cancel: () => {
       timer.clear();
-      ended = true;
-      waiters.settle(storedVersion, ended);
+      state.ended = true;
+      waiters.settle(state.storedVersion, state.ended);
     },
   };
 }

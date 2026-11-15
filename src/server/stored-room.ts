@@ -7,6 +7,7 @@ import type {
   RoomLoadResult,
   RoomMetricEvent,
   RoomStoreResult,
+  StoredRoomVersion,
 } from './host/adapters.js';
 import type { ResolvedRoomHost } from './host/host.js';
 import type { StoreOutcome } from './store-scheduler.js';
@@ -15,6 +16,7 @@ import type { StoreOutcome } from './store-scheduler.js';
 export interface OpenedDoc {
   doc: Doc;
   baseRevision: string | null;
+  version: StoredRoomVersion | null;
   /** Why the document started a new generation, or `null` when it kept its own. */
   newGeneration: RoomGenerationReason | null;
 }
@@ -27,6 +29,7 @@ export interface RoomStoreContext {
   doc: Doc;
   host: ResolvedRoomHost;
   baseRevision: string | null;
+  version: StoredRoomVersion | null;
   conflicted: boolean;
   /** The actors whose changes no stored state holds yet, by id, in the order they changed it. */
   editors: Map<string, RoomActor>;
@@ -68,7 +71,8 @@ function startGeneration(doc: Doc) {
 }
 
 type StoredRead =
-  Exclude<RoomLoadResult, { status: 'found' }> | { status: 'found'; revision: string; doc: Doc };
+  | Exclude<RoomLoadResult, { status: 'found' }>
+  | { status: 'found'; revision: string; sequence: number; doc: Doc };
 
 /** Stored documents and seeds must stand alone, with nothing deferred until a later write. */
 function applyCompleteUpdate(doc: Doc, update: Uint8Array) {
@@ -90,7 +94,7 @@ async function readStored(name: string, host: ResolvedRoomHost): Promise<StoredR
   const doc = new Doc();
   try {
     applyCompleteUpdate(doc, update);
-    return { status: 'found', revision, doc };
+    return { status: 'found', revision, sequence, doc };
   } catch (error) {
     doc.destroy();
     return { status: 'corrupt', reason: toError(error).message, version: { revision, sequence } };
@@ -117,19 +121,28 @@ async function seedDoc(name: string, host: ResolvedRoomHost): Promise<Doc> {
  * corrupt or stale one stores over the state it replaces. Unavailable storage, or a seed that
  * fails, fails the load.
  */
-export async function openStoredDoc(name: string, host: ResolvedRoomHost): Promise<DocLoad> {
+export async function openStoredDoc(
+  name: string,
+  host: ResolvedRoomHost,
+  reset = false,
+): Promise<DocLoad> {
   const started = host.clock.now();
   const loaded = await readStored(name, host);
   const durationMs = host.clock.now() - started;
   recordMetric(host, { type: 'load', room: name, outcome: loaded.status, durationMs });
   if (loaded.status === 'unavailable') return { ok: false, error: loaded.error };
-  if (loaded.status === 'found') {
-    const { doc, revision } = loaded;
+  if (loaded.status === 'found' && !reset) {
+    const { doc, revision, sequence } = loaded;
     const marked = readRoomGeneration(doc) !== null;
     if (!marked) startGeneration(doc);
     return {
       ok: true,
-      opened: { doc, baseRevision: revision, newGeneration: marked ? null : 'unmarked' },
+      opened: {
+        doc,
+        baseRevision: revision,
+        version: { revision, sequence },
+        newGeneration: marked ? null : 'unmarked',
+      },
     };
   }
   if (loaded.status === 'corrupt') {
@@ -138,10 +151,25 @@ export async function openStoredDoc(name: string, host: ResolvedRoomHost): Promi
       reason: loaded.reason,
     });
   }
+  if (loaded.status === 'found') loaded.doc.destroy();
   try {
     const seeded = await seedDoc(name, host);
-    const baseRevision = loaded.status === 'missing' ? null : loaded.version.revision;
-    return { ok: true, opened: { doc: seeded, baseRevision, newGeneration: loaded.status } };
+    const version =
+      loaded.status === 'missing'
+        ? null
+        : loaded.status === 'found'
+          ? { revision: loaded.revision, sequence: loaded.sequence }
+          : loaded.version;
+    const baseRevision = version?.revision ?? null;
+    return {
+      ok: true,
+      opened: {
+        doc: seeded,
+        baseRevision,
+        version,
+        newGeneration: loaded.status === 'found' ? 'stale' : loaded.status,
+      },
+    };
   } catch (error) {
     return { ok: false, error: toError(error) };
   }
@@ -162,7 +190,7 @@ export async function storeRoom(context: RoomStoreContext): Promise<StoreOutcome
   if (context.conflicted) return 'abandoned';
   const update = encodeStateAsUpdate(context.doc);
   // Changes made while the store runs belong to the next one.
-  const editors = [...context.editors.values()];
+  const editors = [...context.editors.values()].map((actor) => ({ ...actor }));
   context.editors.clear();
   const started = host.clock.now();
   let result: RoomStoreResult;
@@ -171,6 +199,11 @@ export async function storeRoom(context: RoomStoreContext): Promise<StoreOutcome
       room: name,
       update,
       baseRevision: context.baseRevision,
+      context: {
+        actors: editors,
+        generation: readRoomGeneration(context.doc),
+        reason: 'checkpoint',
+      },
     });
   } catch (error) {
     result = { status: 'unavailable', error: toError(error) };
@@ -185,6 +218,7 @@ export async function storeRoom(context: RoomStoreContext): Promise<StoreOutcome
   });
   if (result.status === 'stored') {
     context.baseRevision = result.revision;
+    context.version = { revision: result.revision, sequence: result.sequence };
     const { revision, sequence } = result;
     emitEvent(host, { type: 'stored', room: name, revision, sequence, editors });
     return 'stored';

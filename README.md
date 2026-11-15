@@ -30,3 +30,25 @@ npm run check   # every gate: lint, format, types, references, specs, build and 
 ```
 
 [CONTRIBUTING.md](CONTRIBUTING.md) has the branch, versioning and source rules.
+
+## Host mutations and durable commits
+
+Room handles expose detached snapshots and validated, attributed transactions. The callback receives a candidate document; keeping it cannot change the live room later.
+
+```ts
+const handle = await server.openRoom('shared');
+const accepted = handle.transact(
+  { actor: { id: 'service' }, capabilities: ['edit'] },
+  (candidate) => candidate.get('content').insert(0, 'Hello'),
+);
+if (accepted) await handle.flush({ timeoutMs: 5000 });
+handle.release();
+```
+
+A flush returns the durable room version and rejects if it cannot guarantee persistence. A signal or timeout bounds the wait while storage retries continue. Failed shutdown retains pending state: read `server.recover()` and retry `server.close()` after storage recovers.
+
+Use `server.commitRoom(room, async snapshot => ({ value, version }))` when a canonical commit also changes the persistence revision. Older checkpoints finish first; later edits continue syncing and wait for the returned revision before their next checkpoint. Commit the canonical state and returned version atomically. Do not nest a serialized operation on the same room inside that callback. `server.invalidate(room)` returns recoverable pending state, fences old handles and clients, and reseeds a new generation on the next load.
+
+`rulesFor(room)` can supply `openGuard(shadow)`. Its synchronous guard sees each candidate transaction on a persistent shadow before acceptance, with the admitted actor and capabilities. Rejected changes never reach the live document. A guarded room holds two documents; accepted updates do not copy the full room.
+
+Presence includes an authenticated `actor` envelope. The default `user` is also authenticated; other presence fields are client supplied. A host can normalize its `user` schema through `host.awareness`, while `actor` remains server controlled. `revoke` and `reauthorize` target the intersection of room, actor and optional admission session id.

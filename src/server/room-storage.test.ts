@@ -166,12 +166,16 @@ describe('room storage', () => {
     const { server } = serve(persistence);
 
     const first = await server.openRoom('notes');
-    first.doc.get('text').insert(0, 'one');
+    first.transact({ actor: { id: 'service' }, capabilities: [] }, (doc) =>
+      doc.get('text').insert(0, 'one'),
+    );
     gated = true;
     first.release();
     await settle();
     const second = await server.openRoom('notes');
-    second.doc.get('text').insert(3, ' two');
+    second.transact({ actor: { id: 'service' }, capabilities: [] }, (doc) =>
+      doc.get('text').insert(3, ' two'),
+    );
     second.release();
     gated = false;
     gate.resolve(undefined);

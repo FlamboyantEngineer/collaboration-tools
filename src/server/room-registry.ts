@@ -1,5 +1,11 @@
+import type { RoomRecoveryState } from './durable-barrier.js';
 import type { ResolvedRoomHost } from './host/host.js';
 import { type LiveRoom, loadRoom, type RoomLoad, type StoreTiming } from './live-room.js';
+import {
+  createRoomOperations,
+  type RoomCommitResult,
+  type RoomSnapshot,
+} from './room-operations.js';
 import { emitEvent, toError } from './stored-room.js';
 
 export interface RoomRegistryOptions {
@@ -21,12 +27,17 @@ export interface RoomRegistry {
   release(room: LiveRoom): void;
   /** The loaded rooms. */
   rooms(): LiveRoom[];
-  /** The loaded room of that name, if any. */
+  /** The loaded instance for a canonical name. */
   find(name: string): LiveRoom | undefined;
   /** The number of rooms loaded or loading. */
   size(): number;
   /** Stores every room and unloads them all. */
   close(): Promise<void>;
+  commit<T>(
+    name: string,
+    operation: (snapshot: RoomSnapshot) => Promise<RoomCommitResult<T>>,
+  ): Promise<T>;
+  invalidate(name: string): Promise<RoomRecoveryState[]>;
 }
 
 interface Entry {
@@ -38,14 +49,49 @@ interface Entry {
   unloading: boolean;
 }
 
-/** Stores a room once more as the registry closes, and logs changes that could not be stored. */
-async function storeBeforeClose(entry: Entry, host: ResolvedRoomHost) {
-  const result = await entry.load;
-  if (!result.ok) return;
-  await result.room.store.flush();
-  if (result.room.store.isDirty()) {
-    host.logger.error('The room closed with changes it could not store.', { room: entry.name });
+function createEntry(
+  name: string,
+  load: Promise<RoomLoad>,
+  settle: (entry: Entry, result: RoomLoad) => RoomLoad,
+): Entry {
+  const entry: Entry = {
+    name,
+    load: load.then((result) => settle(entry, result)),
+    room: null,
+    holds: 0,
+    unloading: false,
+  };
+  return entry;
+}
+
+async function closeEntries(entries: readonly Entry[], destroy: (entry: Entry) => void) {
+  for (const entry of entries) {
+    const loaded = await entry.load;
+    if (!loaded.ok) continue;
+    await loaded.room.store.flush();
+    if (loaded.room.store.isDirty())
+      throw new Error(`Room ${entry.name} has recoverable unsaved changes.`);
   }
+  for (const entry of entries) destroy(entry);
+}
+
+function createRoomEntries(
+  options: RoomRegistryOptions,
+  state: { reset: Set<string>; entries: Map<string, Entry> },
+  callbacks: { onConflict(room: LiveRoom): void; settle(entry: Entry, result: RoomLoad): RoomLoad },
+) {
+  return (name: string): Entry => {
+    const load = loadRoom({
+      name,
+      host: options.host,
+      timing: options.timing,
+      onConflict: callbacks.onConflict,
+      reset: state.reset.has(name),
+    }).catch((error: unknown): RoomLoad => ({ ok: false, error: toError(error) }));
+    const entry = createEntry(name, load, callbacks.settle);
+    state.entries.set(name, entry);
+    return entry;
+  };
 }
 
 export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
@@ -53,6 +99,7 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
   // Every loaded room's entry, including one a conflict took out of `entries`.
   const byRoom = new Map<LiveRoom, Entry>();
   let closing = false;
+  const reset = new Set<string>();
 
   const forget = (entry: Entry) => {
     if (entries.get(entry.name) === entry) entries.delete(entry.name);
@@ -68,6 +115,7 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
   };
 
   const onConflict = (room: LiveRoom) => {
+    room.fence();
     const entry = byRoom.get(room);
     // Later joins load what the other writer stored.
     if (entry) forget(entry);
@@ -76,31 +124,18 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
 
   const settle = (entry: Entry, result: RoomLoad) => {
     if (result.ok) {
+      reset.delete(entry.name);
       entry.room = result.room;
       byRoom.set(result.room, entry);
     } else forget(entry);
     return result;
   };
 
-  const create = (name: string): Entry => {
-    const load = loadRoom({ name, host: options.host, timing: options.timing, onConflict }).catch(
-      (error: unknown): RoomLoad => ({ ok: false, error: toError(error) }),
-    );
-    const entry: Entry = {
-      name,
-      load: load.then((result) => settle(entry, result)),
-      room: null,
-      holds: 0,
-      unloading: false,
-    };
-    entries.set(name, entry);
-    return entry;
-  };
+  const create = createRoomEntries(options, { reset, entries }, { onConflict, settle });
 
   const unload = async (entry: Entry, room: LiveRoom) => {
     entry.unloading = true;
-    // A room whose storage fails stays loaded, retrying, until its changes are stored. A hold
-    // taken and released while it stores leaves changes the drain did not cover: store those too.
+    // A room whose storage fails stays loaded, retrying, until its changes are stored.
     while (entry.holds === 0 && entries.get(entry.name) === entry && room.store.isDirty()) {
       if (!(await room.store.drain())) break;
     }
@@ -125,11 +160,25 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
 
   const close = async () => {
     closing = true;
-    await Promise.all([...entries.values()].map((entry) => storeBeforeClose(entry, options.host)));
-    for (const entry of [...byRoom.values()]) destroy(entry);
+    await operations.idle();
+    await Promise.all([...entries.values()].map((entry) => entry.load));
+    await closeEntries([...byRoom.values()], destroy);
   };
 
+  const operations = createRoomOperations({
+    acquire,
+    release,
+    forget: (room) => {
+      const entry = byRoom.get(room);
+      if (entry) {
+        reset.add(entry.name);
+        destroy(entry);
+      }
+    },
+  });
+
   return {
+    ...operations,
     acquire,
     release,
     rooms: () => [...byRoom.keys()],

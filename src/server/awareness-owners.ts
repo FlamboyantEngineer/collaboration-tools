@@ -1,5 +1,6 @@
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
+import { encodeUtf8 } from 'lib0/string';
 
 /** One client's entry in an encoded awareness update. */
 export interface AwarenessEntry {
@@ -11,16 +12,30 @@ export interface AwarenessEntry {
 
 /** Reads every entry of an encoded awareness update. */
 export function decodeAwarenessEntries(update: Uint8Array): AwarenessEntry[] {
+  if (update.byteLength > 64 * 1024) throw new Error('Awareness update exceeds limit.');
   const decoder = decoding.createDecoder(update);
   const count = decoding.readVarUint(decoder);
   // Each entry needs at least one byte each for its id, clock and string length.
-  if (count > Math.floor((update.length - decoder.pos) / 3))
+  if (count > 64 || count > Math.floor((update.length - decoder.pos) / 3))
     throw new Error('Invalid awareness entry count.');
-  return Array.from({ length: count }, () => ({
+  const entries = Array.from({ length: count }, () => ({
     clientId: decoding.readVarUint(decoder),
     clock: decoding.readVarUint(decoder),
     state: decoding.readVarString(decoder),
   }));
+  if (decoding.hasContent(decoder)) throw new Error('Trailing awareness data.');
+  for (const entry of entries) {
+    if (
+      !Number.isSafeInteger(entry.clientId) ||
+      !Number.isSafeInteger(entry.clock) ||
+      encodeUtf8(entry.state).byteLength > 16 * 1024
+    )
+      throw new Error('Invalid awareness entry.');
+    const state: unknown = JSON.parse(entry.state);
+    if (state !== null && (typeof state !== 'object' || Array.isArray(state)))
+      throw new Error('Invalid awareness state.');
+  }
+  return entries;
 }
 
 /** Encodes entries as an awareness update. */
@@ -66,6 +81,8 @@ export function createAwarenessOwners<Owner>(): AwarenessOwners<Owner> {
     const current = owners.get(entry.clientId);
     if (current !== undefined) return current === owner;
     if (entry.clock <= clockOf(entry.clientId) || !isObjectState(entry.state)) return false;
+    if (owners.size >= 1024 || [...owners.values()].filter((value) => value === owner).length >= 16)
+      throw new Error('Awareness client budget exceeded.');
     owners.set(entry.clientId, owner);
     return true;
   };

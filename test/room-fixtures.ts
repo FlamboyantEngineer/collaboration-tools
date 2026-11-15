@@ -24,6 +24,7 @@ export function largeRoom(): Doc {
       }
     });
     applyUpdate(room, encodeStateAsUpdate(peer, encodeStateVector(room)));
+    peer.destroy();
   }
   for (let thread = 0; thread < 500; thread++) room.get('comments').setAttr(`t${thread}`, 'note');
   return room;
@@ -35,5 +36,7 @@ export function changeOf(room: Doc, change: (copy: Doc) => void): Uint8Array {
   applyUpdate(copy, encodeStateAsUpdate(room));
   const before = encodeStateVector(copy);
   change(copy);
-  return encodeStateAsUpdate(copy, before);
+  const update = encodeStateAsUpdate(copy, before);
+  copy.destroy();
+  return update;
 }
