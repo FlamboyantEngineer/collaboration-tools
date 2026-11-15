@@ -24,9 +24,14 @@ describe('openShadowGuard', () => {
       check: ({ transaction }) => seen.push(transaction) > 0,
     }));
     room.on('update', (update: Uint8Array) => guard.follow(update));
-    const keystrokes = Array.from({ length: 100 }, (_, index) =>
-      changeOf(room, (copy) => (copy.get('content').get(index * 7) as Type).insert(3, 'y')),
-    );
+    // One writer's keystrokes, each its own update, made on one copy of the room.
+    const writer = new Doc();
+    applyUpdate(writer, encodeStateAsUpdate(room));
+    const keystrokes: Uint8Array[] = [];
+    writer.on('update', (update: Uint8Array) => keystrokes.push(update));
+    for (let index = 0; index < 100; index++) {
+      (writer.get('content').get(index * 7) as Type).insert(3, 'y');
+    }
 
     const started = performance.now();
     for (const keystroke of keystrokes) {

@@ -85,6 +85,13 @@ Each awareness client id shall belong to the connection that first publishes an 
 Implementation: `src/server/awareness-owners.ts`
 Verification: `src/server/awareness-owners.test.ts`
 
+### COLLAB-SERVER-3.4 - Expiry
+
+A presence its client has not renewed for 30 s, measured on the host's `clock`, shall be removed and the removal sent to every member. The room shall check every 3 s, holding a timer only while it tracks some presence.
+
+Implementation: `src/server/awareness-expiry.ts`, `src/server/live-room.ts`, `src/server/member-frames.ts`
+Verification: `src/server/room-server.test.ts`
+
 ## COLLAB-SERVER-4 - Storage
 
 ### COLLAB-SERVER-4.1 - Loading

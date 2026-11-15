@@ -1,23 +1,87 @@
 import { Doc, encodeStateAsUpdate } from '@y/y';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createLoopbackServer, flush, type LoopbackServer } from '../../test/loopback-server.js';
 import { createManualClock } from '../../test/manual-clock.js';
+import { connectToServer, type PairedSocket, settle } from '../../test/server-sockets.js';
+import { createUnopenedSockets } from '../../test/unopened-sockets.js';
+import type { RoomAccess } from '../protocol/messages.js';
+import { readRoomGeneration } from '../protocol/room-meta.js';
+import type { RoomAdmission } from '../server/host/adapters.js';
+import { createMemoryPersistence } from '../server/host/memory-persistence.js';
+import { createRoomServer, type RoomServer } from '../server/room-server.js';
 import type { RoomConnectionState } from './connection-state.js';
 import {
   createRoomProvider,
   type RoomProvider,
   type RoomProviderOptions,
 } from './room-provider.js';
+import type { RoomSocketFactory } from './room-socket.js';
 
 const ENDPOINT = 'wss://rooms.example.test/live';
+const ROOM = 'notes/1';
 const providers: RoomProvider[] = [];
+const servers: RoomServer[] = [];
 
-function open(server: LoopbackServer, options: Partial<RoomProviderOptions> = {}) {
+/** A room server in this process, with its sockets and the stateless messages members sent. */
+interface Served {
+  server: RoomServer;
+  createSocket: RoomSocketFactory;
+  readonly sockets: readonly PairedSocket[];
+  readonly urls: string[];
+  readonly stateless: string[];
+}
+
+/** Starts a room server that admits each connection with the access, or refusal, `admit` gives. */
+function serve(
+  admit: (token: string | null) => RoomAccess | { refuse: 'forbidden' } = () => 'read-write',
+): Served {
+  const stateless: string[] = [];
+  const server = createRoomServer({
+    host: {
+      auth: {
+        admit: ({ token }) => {
+          const decision = admit(token);
+          const admission: RoomAdmission =
+            typeof decision === 'string'
+              ? { ok: true, actor: { id: token ?? 'guest' }, access: decision }
+              : { ok: false, reason: decision.refuse };
+          return Promise.resolve(admission);
+        },
+      },
+      persistence: createMemoryPersistence(),
+      clock: createManualClock(),
+    },
+    onStateless: (message) => stateless.push(message.payload),
+  });
+  servers.push(server);
+  const sockets = connectToServer(server);
+  return {
+    server,
+    createSocket: sockets.createSocket,
+    sockets: sockets.sockets,
+    get urls() {
+      return sockets.sockets.map((socket) => socket.url);
+    },
+    stateless,
+  };
+}
+
+/** The text of the room's live document on the server. */
+async function serverText(served: Served) {
+  const handle = await served.server.openRoom(ROOM);
+  const content = handle.doc.get('text').toString();
+  handle.release();
+  return content;
+}
+
+function open(
+  served: { createSocket: RoomSocketFactory },
+  options: Partial<RoomProviderOptions> = {},
+) {
   const provider = createRoomProvider({
     endpoint: ENDPOINT,
-    room: 'notes/1',
+    room: ROOM,
     doc: new Doc(),
-    createSocket: server.createSocket,
+    createSocket: served.createSocket,
     clock: createManualClock(),
     ...options,
   });
@@ -29,41 +93,50 @@ function text(provider: RoomProvider) {
   return provider.doc.get('text').toString();
 }
 
-afterEach(() => {
+function lastSocket<Socket>(served: { readonly sockets: readonly Socket[] }): Socket {
+  const socket = served.sockets.at(-1);
+  if (!socket) throw new Error('no socket');
+  return socket;
+}
+
+afterEach(async () => {
   for (const provider of providers.splice(0)) provider.destroy();
+  await Promise.all(servers.splice(0).map((server) => server.close()));
 });
 
 describe('createRoomProvider', () => {
   it('COLLAB-CLIENT-1.1 opens the room URL with the token read for that attempt', async () => {
-    const server = createLoopbackServer();
+    const server = serve();
     const tokens = ['first', 'second'];
     const provider = open(server, {
       getToken: () => tokens.shift() ?? null,
       params: { mode: 'edit' },
     });
-    await flush();
+    await settle();
 
     provider.disconnect();
     provider.connect();
-    await flush();
+    await settle();
 
+    // The second attempt also names the room generation the first one synced.
+    const generation = readRoomGeneration(provider.doc) ?? '';
     expect(server.urls).toEqual([
       'wss://rooms.example.test/live/notes%2F1?mode=edit&token=first',
-      'wss://rooms.example.test/live/notes%2F1?mode=edit&token=second',
+      `wss://rooms.example.test/live/notes%2F1?mode=edit&generation=${generation}&token=second`,
     ]);
   });
 
   it('COLLAB-CLIENT-1.2 syncs a document between two providers and reports the granted access', async () => {
-    const server = createLoopbackServer();
+    const server = serve();
     const first = open(server);
     const second = open(server);
-    await flush();
+    await settle();
 
     first.doc.get('text').insert(0, 'hello');
-    await flush();
+    await settle();
 
     expect(text(second)).toBe('hello');
-    expect(server.doc('notes/1').get('text').toString()).toBe('hello');
+    expect(await serverText(server)).toBe('hello');
     expect(second.getState()).toMatchObject({
       status: 'connected',
       access: 'read-write',
@@ -74,9 +147,9 @@ describe('createRoomProvider', () => {
   });
 
   it('COLLAB-CLIENT-1.2 starts disconnected with pending access when told not to connect', async () => {
-    const server = createLoopbackServer();
+    const server = serve();
     const provider = open(server, { connect: false });
-    await flush();
+    await settle();
 
     expect(server.urls).toEqual([]);
     expect(provider.getState()).toEqual({
@@ -93,15 +166,13 @@ describe('createRoomProvider', () => {
   });
 
   it('COLLAB-CLIENT-1.3 reports read-only access and keeps receiving changes', async () => {
-    const server = createLoopbackServer({
-      admit: (token) => (token === 'reader' ? 'read-only' : 'read-write'),
-    });
+    const server = serve((token) => (token === 'reader' ? 'read-only' : 'read-write'));
     const writer = open(server);
     const reader = open(server, { getToken: () => 'reader' });
-    await flush();
+    await settle();
 
     writer.doc.get('text').insert(0, 'shared');
-    await flush();
+    await settle();
 
     expect(reader.getState().access).toBe('read-only');
     expect(text(reader)).toBe('shared');
@@ -109,19 +180,17 @@ describe('createRoomProvider', () => {
 
   it('COLLAB-CLIENT-1.4 stops reconnecting after a refusal until connect is called', async () => {
     let refuse = true;
-    const server = createLoopbackServer({
-      admit: () => (refuse ? { refuse: 'forbidden' } : 'read-write'),
-    });
+    const server = serve(() => (refuse ? { refuse: 'forbidden' } : 'read-write'));
     const clock = createManualClock();
     const provider = open(server, { clock });
-    await flush();
+    await settle();
 
     clock.advance(10_000);
-    await flush();
+    await settle();
     const afterRefusal = provider.getState();
     refuse = false;
     provider.connect();
-    await flush();
+    await settle();
 
     expect(afterRefusal).toMatchObject({ status: 'disconnected', refusal: 'forbidden' });
     expect(server.urls).toHaveLength(2);
@@ -129,19 +198,21 @@ describe('createRoomProvider', () => {
   });
 
   it('COLLAB-CLIENT-1.5 notifies subscribers of each change until they unsubscribe', async () => {
-    const server = createLoopbackServer();
+    const server = serve();
     const provider = open(server, { connect: false });
     const states: RoomConnectionState[] = [];
     const unsubscribe = provider.subscribe((state) => states.push(state));
 
     provider.connect();
-    await flush();
+    await settle();
     unsubscribe();
     const notified = states.length;
     provider.disconnect();
 
+    // Opening, open, then the access, the room's save status and the sync.
     expect(states.map((state) => state.status)).toEqual([
       'connecting',
+      'connected',
       'connected',
       'connected',
       'connected',
@@ -152,49 +223,52 @@ describe('createRoomProvider', () => {
   });
 
   it('COLLAB-CLIENT-2.1 reconnects at once after an open socket drops, then backs off', async () => {
-    const server = createLoopbackServer({ manualOpen: true });
+    const served = serve();
+    // The first socket reaches the server; the later ones never open.
+    const unopened = createUnopenedSockets();
+    let attempts = 0;
+    const createSocket: RoomSocketFactory = (url) =>
+      attempts++ === 0 ? served.createSocket(url) : unopened.createSocket(url);
     const clock = createManualClock();
-    open(server, { clock, maxBackoffMs: 500 });
+    open({ createSocket }, { clock, maxBackoffMs: 500 });
+    await settle();
 
-    const first = lastSocket(server);
-    first.accept();
-    await flush();
-    first.drop();
-    await flush();
+    lastSocket(served).drop();
+    await settle();
     const afterDrop = clock.pendingDelays().filter((delay) => delay < 4_000);
     clock.advance(0);
-    lastSocket(server).drop();
-    await flush();
+    lastSocket(unopened).drop();
+    await settle();
     const afterFailure = clock.pendingDelays().filter((delay) => delay < 4_000);
     clock.advance(200);
-    lastSocket(server).drop();
-    await flush();
+    lastSocket(unopened).drop();
+    await settle();
     clock.advance(400);
-    lastSocket(server).drop();
-    await flush();
+    lastSocket(unopened).drop();
+    await settle();
 
     expect(afterDrop).toEqual([0]);
     expect(afterFailure).toEqual([200]);
     expect(clock.pendingDelays()).toEqual([500]);
-    expect(server.sockets).toHaveLength(4);
+    expect(attempts).toBe(4);
   });
 
   it('COLLAB-CLIENT-2.2 closes a socket that stays silent past the timeout and reconnects', async () => {
-    const server = createLoopbackServer();
+    const server = serve();
     const clock = createManualClock();
     const provider = open(server, { clock, socketTimeoutMs: 10_000 });
-    await flush();
+    await settle();
 
-    server.silent = true;
+    lastSocket(server).deaf = true;
     clock.advance(12_000);
-    await flush();
+    await settle();
 
     expect(provider.getState().closeCode).toBeNull();
     expect(server.urls).toHaveLength(2);
   });
 
   it('COLLAB-CLIENT-2.3 closes while offline and reconnects when back online', async () => {
-    const server = createLoopbackServer();
+    const server = serve();
     const listeners = new Map<string, () => void>();
     const connectivity = {
       addEventListener: (type: string, listener: () => void) => listeners.set(type, listener),
@@ -202,15 +276,15 @@ describe('createRoomProvider', () => {
     };
     const clock = createManualClock();
     const provider = open(server, { clock, connectivity });
-    await flush();
+    await settle();
 
     listeners.get('offline')?.();
-    await flush();
+    await settle();
     clock.advance(10_000);
     const offline = provider.getState().status;
     const attemptsWhileOffline = server.urls.length;
     listeners.get('online')?.();
-    await flush();
+    await settle();
 
     expect(offline).toBe('disconnected');
     expect(attemptsWhileOffline).toBe(1);
@@ -220,41 +294,41 @@ describe('createRoomProvider', () => {
   });
 
   it('COLLAB-CLIENT-3.1 reports unconfirmed changes until the server echoes them', async () => {
-    const server = createLoopbackServer();
+    const server = serve();
     const provider = open(server);
-    await flush();
+    await settle();
 
     provider.doc.get('text').insert(0, 'draft');
     const pending = provider.getState().hasUnconfirmedChanges;
-    await flush();
+    await settle();
 
     expect(pending).toBe(true);
     expect(provider.getState().hasUnconfirmedChanges).toBe(false);
   });
 
   it('COLLAB-CLIENT-3.2 resends changes the server never echoed after reconnecting', async () => {
-    const server = createLoopbackServer();
+    const server = serve();
     const clock = createManualClock();
     const provider = open(server, { clock });
-    await flush();
+    await settle();
 
-    server.dropEchoes = true;
+    // The echo of this edit is lost, as when a socket drops right after sending.
+    lastSocket(server).deaf = true;
     provider.doc.get('text').insert(0, 'kept');
-    await flush();
+    await settle();
     const pending = provider.getState().hasUnconfirmedChanges;
-    server.dropEchoes = false;
     lastSocket(server).drop();
-    await flush();
+    await settle();
     clock.advance(0);
-    await flush();
+    await settle();
 
     expect(pending).toBe(true);
-    expect(server.doc('notes/1').get('text').toString()).toBe('kept');
+    expect(await serverText(server)).toBe('kept');
     expect(provider.getState()).toMatchObject({ syncCount: 2, hasUnconfirmedChanges: false });
   });
 
   it('COLLAB-CLIENT-3.3 keeps unconfirmed changes across a reload and sends them on connect', async () => {
-    const server = createLoopbackServer();
+    const server = serve();
     const offline = open(server, { connect: false });
     offline.doc.get('text').insert(0, 'offline');
     const kept = offline.getUnconfirmedUpdate();
@@ -269,13 +343,14 @@ describe('createRoomProvider', () => {
     const restored = reloaded.getState().hasUnconfirmedChanges;
     const restoredText = text(reloaded);
     reloaded.connect();
-    await flush();
+    await settle();
 
     expect(kept).not.toBeNull();
     expect(restored).toBe(true);
     expect(restoredText).toBe('offline');
-    expect(origins).toEqual([true]);
-    expect(server.doc('notes/1').get('text').toString()).toBe('offline');
+    // The restored update, then the room's generation from the server: both remote.
+    expect(origins).toEqual([true, true]);
+    expect(await serverText(server)).toBe('offline');
     expect(states.at(-1)).toMatchObject({ synced: true, hasUnconfirmedChanges: false });
     expect(reloaded.getUnconfirmedUpdate()).toBeNull();
   });
@@ -286,7 +361,7 @@ describe('createRoomProvider', () => {
     const doc = new Doc();
     const origins: unknown[] = [];
     doc.on('update', (_update: Uint8Array, origin: unknown) => origins.push(origin));
-    const provider = open(createLoopbackServer(), {
+    const provider = open(serve(), {
       doc,
       connect: false,
       unconfirmedUpdate: encodeStateAsUpdate(source),
@@ -298,19 +373,19 @@ describe('createRoomProvider', () => {
   });
 
   it('COLLAB-CLIENT-4.1 shares awareness and forgets remote states when the socket closes', async () => {
-    const server = createLoopbackServer();
+    const server = serve();
     const first = open(server);
     const second = open(server);
-    await flush();
+    await settle();
 
     first.awareness.setLocalStateField('name', 'Ada');
-    await flush();
+    await settle();
     const seen = second.awareness.getStates().get(first.awareness.clientID);
     first.disconnect();
-    await flush();
+    await settle();
     const afterLeave = second.awareness.getStates().has(first.awareness.clientID);
     lastSocket(server).drop();
-    await flush();
+    await settle();
 
     expect(seen).toEqual({ name: 'Ada' });
     expect(afterLeave).toBe(false);
@@ -318,22 +393,22 @@ describe('createRoomProvider', () => {
   });
 
   it('COLLAB-CLIENT-4.1 sends back none of the room’s awareness and renews its own clock on open', async () => {
-    const server = createLoopbackServer();
+    const server = serve();
     const clock = createManualClock();
     const first = open(server, { clock });
     const second = open(server);
-    await flush();
+    await settle();
     const secondSocket = server.sockets[1];
     if (!secondSocket) throw new Error('no socket');
     const sentBySecond = vi.spyOn(secondSocket, 'send');
 
     first.awareness.setLocalStateField('name', 'Ada');
-    await flush();
+    await settle();
     const clockBefore = first.awareness.meta.get(first.awareness.clientID)?.clock ?? 0;
     server.sockets[0]?.drop();
-    await flush();
+    await settle();
     clock.advance(0);
-    await flush();
+    await settle();
 
     expect(second.awareness.getStates().get(first.awareness.clientID)).toEqual({ name: 'Ada' });
     expect(sentBySecond).not.toHaveBeenCalled();
@@ -341,34 +416,34 @@ describe('createRoomProvider', () => {
   });
 
   it('COLLAB-CLIENT-4.2 sends and receives stateless messages', async () => {
-    const server = createLoopbackServer();
+    const server = serve();
     const provider = open(server, { connect: false });
     const received: string[] = [];
     provider.onStateless((payload) => received.push(payload));
 
     const sentOffline = provider.sendStateless('too early');
     provider.connect();
-    await flush();
+    await settle();
     const sent = provider.sendStateless('ping');
-    server.broadcastStateless('notes/1', 'pong');
-    await flush();
+    server.server.broadcastStateless(ROOM, 'pong');
+    await settle();
 
     expect(sentOffline).toBe(false);
     expect(sent).toBe(true);
-    expect(server.statelessReceived).toEqual(['ping']);
+    expect(server.stateless).toEqual(['ping']);
     expect(received).toEqual(['pong']);
   });
 
   it('COLLAB-CLIENT-4.3 marks what the server sent with an origin it recognises', async () => {
-    const server = createLoopbackServer();
+    const server = serve();
     const first = open(server);
     const second = open(server);
-    await flush();
+    await settle();
     const origins: unknown[] = [];
     second.doc.on('update', (_update: Uint8Array, origin: unknown) => origins.push(origin));
 
     first.doc.get('text').insert(0, 'x');
-    await flush();
+    await settle();
 
     expect(origins).toHaveLength(1);
     expect(second.isRemoteOrigin(origins[0])).toBe(true);
@@ -376,44 +451,38 @@ describe('createRoomProvider', () => {
   });
 
   it('COLLAB-CLIENT-4.4 stops syncing and owns nothing after destroy', async () => {
-    const server = createLoopbackServer();
+    const server = serve();
     const provider = open(server);
-    await flush();
+    await settle();
 
     provider.destroy();
     provider.doc.get('text').insert(0, 'local');
     provider.connect();
-    await flush();
+    await settle();
 
-    expect(server.openSockets()).toEqual([]);
-    expect(server.doc('notes/1').get('text').toString()).toBe('');
+    expect(server.sockets.filter((socket) => !socket.closed)).toEqual([]);
+    expect(await serverText(server)).toBe('');
     expect(provider.awareness.getLocalState()).toBeNull();
   });
 });
 
-function lastSocket(server: LoopbackServer) {
-  const socket = server.sockets.at(-1);
-  if (!socket) throw new Error('no socket');
-  return socket;
-}
-
 describe('connection recovery boundaries', () => {
   it('COLLAB-CLIENT-2.2 replaces a socket that never opens', async () => {
-    const server = createLoopbackServer({ manualOpen: true });
+    const unopened = createUnopenedSockets();
     const clock = createManualClock();
-    const provider = open(server, { clock, socketTimeoutMs: 10_000 });
+    const provider = open(unopened, { clock, socketTimeoutMs: 10_000 });
 
     clock.advance(12_000);
-    await flush();
+    await settle();
     clock.advance(200);
-    await flush();
+    await settle();
 
-    expect(server.urls).toHaveLength(2);
+    expect(unopened.sockets).toHaveLength(2);
     expect(provider.getState().status).toBe('connecting');
   });
 
   it('COLLAB-CLIENT-2.1 retries a socket factory that throws', async () => {
-    const server = createLoopbackServer();
+    const server = serve();
     const clock = createManualClock();
     const logger = { error: vi.fn() };
     const createSocket = vi
@@ -425,7 +494,7 @@ describe('connection recovery boundaries', () => {
     const provider = open(server, { clock, logger, createSocket });
     expect(provider.getState().status).toBe('disconnected');
     clock.advance(200);
-    await flush();
+    await settle();
 
     expect(provider.getState().status).toBe('connected');
     expect(logger.error).toHaveBeenCalled();
@@ -433,11 +502,11 @@ describe('connection recovery boundaries', () => {
 });
 
 it('COLLAB-CLIENT-2.1 clears a scheduled retry when explicitly reconnecting', async () => {
-  const server = createLoopbackServer({ manualOpen: true });
+  const unopened = createUnopenedSockets();
   const clock = createManualClock();
-  const provider = open(server, { clock });
-  lastSocket(server).drop();
-  await flush();
+  const provider = open(unopened, { clock });
+  lastSocket(unopened).drop();
+  await settle();
 
   provider.connect();
   provider.disconnect();

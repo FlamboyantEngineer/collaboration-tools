@@ -2,6 +2,7 @@ import { Awareness, encodeAwarenessUpdate, removeAwarenessStates } from '@y/prot
 import type { Doc } from '@y/y';
 import { encodeAwarenessFrame, encodeSyncUpdate } from '../protocol/frames.js';
 import { encodeStorageMessage } from '../protocol/messages.js';
+import { type AwarenessExpiry, createAwarenessExpiry } from './awareness-expiry.js';
 import { type AwarenessOwners, createAwarenessOwners } from './awareness-owners.js';
 import type { RoomActor, RoomWriteRules } from './host/adapters.js';
 import type { ResolvedRoomHost } from './host/host.js';
@@ -37,6 +38,8 @@ export interface LiveRoom {
   readonly awareness: Awareness;
   readonly members: Set<RoomMember>;
   readonly owners: AwarenessOwners<RoomMember>;
+  /** When each presence was last renewed, on the room clock. */
+  readonly presence: AwarenessExpiry;
   readonly store: StoreScheduler;
   /** The host's write rules for the room, read when it loaded. */
   readonly rules: RoomWriteRules;
@@ -64,6 +67,7 @@ export interface LoadRoomOptions {
 function removeMember(room: LiveRoom, member: RoomMember) {
   if (!room.members.delete(member)) return;
   const released = room.owners.release(member);
+  room.presence.forget(released);
   const known = released.filter((id) => room.awareness.meta.has(id));
   removeAwarenessStates(room.awareness, released, member);
   if (known.length > 0) {
@@ -96,6 +100,17 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
   }
   const awareness = new Awareness(doc);
   awareness.setLocalState(null);
+  // Presence expires on the room clock instead (COLLAB-SERVER-3.4).
+  clearInterval(awareness._checkInterval as ReturnType<typeof setInterval>);
+  const presence = createAwarenessExpiry({
+    clock: host.clock,
+    onExpired: (ids) => {
+      const present = ids.filter((id) => awareness.states.has(id));
+      if (present.length === 0) return;
+      removeAwarenessStates(awareness, present, 'timeout');
+      room.broadcast(encodeAwarenessFrame(encodeAwarenessUpdate(awareness, present)));
+    },
+  });
   const context: RoomStoreContext = {
     name,
     doc,
@@ -117,6 +132,7 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
     awareness,
     members: new Set(),
     owners: createAwarenessOwners(),
+    presence,
     store,
     rules,
     guard,
@@ -128,6 +144,7 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
     destroy: () => {
       store.cancel();
       guard?.destroy();
+      presence.destroy();
       awareness.destroy();
       doc.destroy();
     },
