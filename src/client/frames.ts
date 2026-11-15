@@ -32,6 +32,9 @@ function readSync(decoder: decoding.Decoder, reply: encoding.Encoder, context: F
     syncProtocol.readSyncStep1(decoder, reply, context.doc);
     return;
   }
+  if (syncType !== syncProtocol.messageYjsSyncStep2 && syncType !== syncProtocol.messageYjsUpdate) {
+    throw new Error(`unknown sync message ${syncType}`);
+  }
   const update = decoding.readVarUint8Array(decoder);
   applyUpdate(context.doc, update, context.origin);
   context.onRemoteUpdate(update, syncType === syncProtocol.messageYjsSyncStep2);

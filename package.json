@@ -83,14 +83,20 @@
     "prettier": "^3.9.10",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.72.1",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.0",
+    "ws": "^8.22.1"
   },
   "dependencies": {
     "@y/protocols": "1.0.6-rc.1",
-    "lib0": "1.0.0-rc.22",
-    "ws": "^8.22.1"
+    "lib0": "1.0.0-rc.22"
   },
   "peerDependencies": {
-    "@y/y": "14.0.0-rc.23"
+    "@y/y": "14.0.0-rc.23",
+    "ws": "^8.22.1"
+  },
+  "peerDependenciesMeta": {
+    "ws": {
+      "optional": true
+    }
   }
 }

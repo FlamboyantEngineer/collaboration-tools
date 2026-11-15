@@ -59,4 +59,16 @@ describe('readServerFrame', () => {
     expect(reader.onStateless).toHaveBeenNthCalledWith(1, 'one');
     expect(reader.onStateless).toHaveBeenNthCalledWith(2, 'two');
   });
+
+  it('COLLAB-PROTOCOL-1.1 rejects a sync message of a type it does not know', () => {
+    const reader = context();
+    const frame = encoding.encode((encoder) => {
+      encoding.writeVarUint(encoder, MESSAGE_TYPES.sync);
+      encoding.writeVarUint(encoder, 7);
+      encoding.writeVarUint8Array(encoder, new Uint8Array([0, 0]));
+    });
+
+    expect(() => readServerFrame(frame, reader)).toThrow('unknown sync message 7');
+    expect(reader.onRemoteUpdate).not.toHaveBeenCalled();
+  });
 });

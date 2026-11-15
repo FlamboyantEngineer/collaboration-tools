@@ -6,7 +6,7 @@ The frames a client and a server exchange over one WebSocket per room. The proto
 
 ### COLLAB-PROTOCOL-1.1 - Message types
 
-`MESSAGE_TYPES` shall number the messages `sync` 0 (the y-protocols sync messages), `awareness` 1 (a y-protocols awareness update), `auth` 2, `queryAwareness` 3 (a request for every awareness state), `stateless` 5 and `storage` 6. A reader that meets a message type it does not know shall stop reading that frame, so a newer peer can add types.
+`MESSAGE_TYPES` shall number the messages `sync` 0 (the y-protocols sync messages), `awareness` 1 (a y-protocols awareness update), `auth` 2, `queryAwareness` 3 (a request for every awareness state), `stateless` 5 and `storage` 6. A reader that meets a message type it does not know shall stop reading that frame, so a newer peer can add types. A sync message whose sync type is not step 1, step 2 or update shall be rejected without applying it: the server closes the socket as an unreadable frame (COLLAB-SERVER-2.4) and the client reports it.
 
 Implementation: `src/protocol/messages.ts`, `src/client/frames.ts`
 Verification: `src/protocol/messages.test.ts`, `src/client/frames.test.ts`

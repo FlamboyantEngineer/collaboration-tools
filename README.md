@@ -18,7 +18,7 @@ The library is in early `0.x` development and has no release yet.
 | `@flamboyantengineer/collaboration-tools/server/websocket` | The WebSocket attachment for a Node HTTP server, through `ws`.                                                           |
 | `@flamboyantengineer/collaboration-tools/testing`          | In-process sockets that connect client providers to a room server without a network, for tests and labs.                 |
 
-`@y/y` (Yjs 14) is a peer dependency, so the host and the library share one Yjs.
+`@y/y` (Yjs 14) is a peer dependency, so the host and the library share one Yjs. `ws` is an optional peer dependency: install it only to use `./server/websocket`, so a client-only install does not pull it.
 
 ## Develop
 
