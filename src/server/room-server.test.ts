@@ -121,6 +121,39 @@ describe('createRoomServer admission', () => {
     expect(context.server.roomCount()).toBe(1);
   });
 
+  it('COLLAB-SERVER-1.4 closes a connection whose frames before admission pass the limit', async () => {
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const server = createRoomServer({
+      host: {
+        // Admission never completes, so every frame waits.
+        auth: { admit: () => new Promise<RoomAdmission>(() => undefined) },
+        persistence: createMemoryPersistence(),
+        clock: createManualClock(),
+        logger,
+      },
+      maxPendingBytes: 1_000,
+    });
+    servers.push(server);
+    const closes: number[] = [];
+    const connection = server.connect(
+      { send: () => undefined, close: (code) => closes.push(code) },
+      { url: '/live/notes', headers: {} },
+    );
+    await settle();
+
+    connection.receive(new Uint8Array(600));
+    const afterOne = [...closes];
+    connection.receive(new Uint8Array(600));
+
+    expect(afterOne).toEqual([]);
+    // 1009, the WebSocket code for a message too big to process.
+    expect(closes).toEqual([1009]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'A connection sent too much before it was admitted.',
+      expect.objectContaining({ room: 'notes' }),
+    );
+  });
+
   it('COLLAB-SERVER-1.3 closes a URL without a room as a bad request', async () => {
     const context = setup();
     const closes: number[] = [];
