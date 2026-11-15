@@ -107,17 +107,13 @@ describe('room write rules', () => {
     handle.release();
   });
 
-  it('COLLAB-SERVER-7.2 runs the finer check, which may simulate the change, and refuses when it throws', async () => {
+  it('COLLAB-SERVER-7.2 runs the finer check on the changes and refuses when it throws', async () => {
     const seen: unknown[] = [];
     const rules: RoomWriteRules = {
       check: (change) => {
         seen.push(Object.fromEntries([...change.changes].map(([type, keys]) => [type, [...keys]])));
-        const after = change.simulate((copy, apply) => {
-          apply();
-          return copy.get('comments').getAttr('t1');
-        });
-        if (after === 'boom') throw new Error('broken check');
-        return after !== 'forbidden';
+        if (change.changes.get('comments')?.has('boom')) throw new Error('broken check');
+        return !change.changes.get('comments')?.has('forbidden');
       },
     };
     const { open } = serve(rules);
@@ -129,14 +125,53 @@ describe('room write rules', () => {
     const broken = open('editor');
     await settle();
 
-    refused.doc.get('comments').setAttr('t1', 'forbidden');
-    broken.doc.get('comments').setAttr('t1', 'boom');
+    refused.doc.get('comments').setAttr('forbidden', 'x');
+    broken.doc.get('comments').setAttr('boom', 'x');
     await settle();
 
     expect(allowed.getState()).toMatchObject({ status: 'connected', hasUnconfirmedChanges: false });
     expect(refused.getState().refusal).toBe('unauthorized-write');
     expect(broken.getState().refusal).toBe('unauthorized-write');
     expect(seen[0]).toEqual({ comments: ['t1'] });
+  });
+
+  it('COLLAB-SERVER-7.2 asks a guard opened at load, on a shadow that follows the room', async () => {
+    const opened: Doc[] = [];
+    const seen: string[] = [];
+    // The guard keeps its own reading of the shadow from the moment it opens, as a live watch does.
+    const rules: RoomWriteRules = {
+      openGuard: (shadow) => {
+        opened.push(shadow);
+        return {
+          check: ({ transaction, actor }) => {
+            const text = transaction.doc.get('body').toString();
+            seen.push(`${actor.id}:${text}`);
+            return !text.includes('forbidden') && text !== 'boom';
+          },
+        };
+      },
+    };
+    const { server, open } = serve(rules);
+    const handle = await server.openRoom('notes');
+    handle.doc.transact(() => handle.doc.get('body').insert(0, 'seed '), 'host');
+    const writer = open('editor');
+    await settle();
+    writer.doc.get('body').insert(5, 'ok');
+    await settle();
+    const refused = open('editor');
+    await settle();
+    refused.doc.get('body').insert(0, 'forbidden ');
+    await settle();
+    writer.doc.get('body').insert(7, '!');
+    await settle();
+
+    expect(seen).toEqual(['e:seed ok', 'e:forbidden seed ok', 'e:seed ok!']);
+    expect(refused.getState().refusal).toBe('unauthorized-write');
+    expect(writer.getState()).toMatchObject({ status: 'connected', hasUnconfirmedChanges: false });
+    expect(handle.doc.get('body').toString()).toBe('seed ok!');
+    // One shadow at load, and one rebuilt from the room after the refusal.
+    expect(opened.map((shadow) => shadow.isDestroyed)).toEqual([true, false]);
+    handle.release();
   });
 
   it('COLLAB-SERVER-7.3 drops an update that builds on missing content and asks for the rest', async () => {
@@ -382,6 +417,28 @@ it('COLLAB-SERVER-1.3 recovers after the permissions adapter throws while loadin
   const handle = await other.openRoom('notes');
   expect(handle.room).toBe('notes');
   handle.release();
+});
+
+it('COLLAB-SERVER-1.3 COLLAB-SERVER-7.2 fails the load when the guard throws as it opens', async () => {
+  const other = createRoomServer({
+    host: {
+      auth: {
+        admit: () => Promise.resolve({ ok: true, actor: { id: 'e' }, access: 'read-write' }),
+      },
+      persistence: createMemoryPersistence(),
+      clock: createManualClock(),
+      permissions: {
+        rulesFor: () => ({
+          openGuard: () => {
+            throw new Error('guard failed');
+          },
+        }),
+      },
+    },
+  });
+  servers.push(other);
+  await expect(other.openRoom('notes')).rejects.toThrow('guard failed');
+  expect(other.roomCount()).toBe(0);
 });
 
 it('COLLAB-SERVER-7.4 starts no refresh after a queued write closes the connection', async () => {

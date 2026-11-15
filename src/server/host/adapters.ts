@@ -3,7 +3,7 @@
  * identity, permissions, storage, logging and time only through these.
  */
 
-import type { Doc } from '@y/y';
+import type { Doc, Transaction } from '@y/y';
 import type { RoomClock } from '../../protocol/clock.js';
 import type { RoomAccess } from '../../protocol/messages.js';
 
@@ -75,12 +75,20 @@ export interface RoomWriteChange {
    * changes; a position in a list or text is `null`.
    */
   changes: ReadonlyMap<string, ReadonlySet<string | null>>;
-  /**
-   * Runs `inspect` on a copy of the room's document. `inspect` may observe the copy, then calls
-   * `apply` to apply the update to it. Copying costs a full encode of the room, so call it only
-   * for the changes that need it.
-   */
-  simulate<T>(inspect: (copy: Doc, apply: () => void) => T): T;
+}
+
+/** A change as a room's guard sees it: already applied to the guard's shadow document. */
+export interface RoomGuardedChange extends RoomWriteChange {
+  /** The shadow's transaction that applied the update. */
+  transaction: Transaction;
+}
+
+/** A room's guard, opened once on a shadow document the library keeps in step with the room. */
+export interface RoomWriteGuard {
+  /** Decides on a change the lists and `check` allow; `false` refuses it. */
+  check(change: RoomGuardedChange): boolean;
+  /** Stops observing the shadow, which the library then destroys. */
+  destroy?(): void;
 }
 
 /** Which connections may change which parts of a room. */
@@ -91,8 +99,14 @@ export interface RoomWriteRules {
   serverOnly?: readonly string[] | undefined;
   /** The capability a type neither list names needs. By default, read-write access is enough. */
   otherwise?: string | undefined;
-  /** A finer check of a change the lists allow; `false` refuses it. */
+  /** A finer check of a change the lists allow, from the changes alone; `false` refuses it. */
   check?: ((change: RoomWriteChange) => boolean) | undefined;
+  /**
+   * Opens the room's guard when it loads, on a shadow copy of the room that holds every change
+   * the room took. The guard may observe the shadow; each candidate update is applied to it before
+   * the guard decides. A guarded room holds its document twice.
+   */
+  openGuard?: ((shadow: Doc) => RoomWriteGuard) | undefined;
 }
 
 /** Gives each room its write rules. */

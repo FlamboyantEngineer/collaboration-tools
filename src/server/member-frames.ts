@@ -54,6 +54,7 @@ function applyMemberUpdate(context: MemberContext, update: Uint8Array) {
     actor: context.actor,
     capabilities: context.capabilities,
     update,
+    guard: room.guard,
   });
   // An incomplete update is dropped, never held back unchecked: the sync step 1 asks the client
   // for everything the room lacks, its dependencies included.

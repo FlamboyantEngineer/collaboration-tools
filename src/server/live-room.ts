@@ -14,6 +14,7 @@ import {
   storeRoom,
   toError,
 } from './stored-room.js';
+import { openShadowGuard, type ShadowGuard } from './write-guard.js';
 
 /** What a room needs from each connection in it. */
 export interface RoomMember {
@@ -39,6 +40,8 @@ export interface LiveRoom {
   readonly store: StoreScheduler;
   /** The host's write rules for the room, read when it loaded. */
   readonly rules: RoomWriteRules;
+  /** The guard the rules opened on a shadow of the room, or `null`. */
+  readonly guard: ShadowGuard | null;
   /** Notes that `actor` changed the room, for the next stored event. */
   edited(actor: RoomActor): void;
   /** Sends `frame` to every member except `except`. */
@@ -79,11 +82,17 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
   if (!load.ok) return load;
   const { doc, baseRevision, newGeneration } = load.opened;
   let rules: RoomWriteRules;
+  let guard: ShadowGuard | null;
   try {
     rules = host.permissions.rulesFor(name) ?? {};
+    guard = rules.openGuard ? openShadowGuard(doc, rules.openGuard) : null;
   } catch (error) {
     doc.destroy();
     return { ok: false, error: toError(error) };
+  }
+  if (guard) {
+    const shadowed = guard;
+    doc.on('update', (update: Uint8Array) => shadowed.follow(update));
   }
   const awareness = new Awareness(doc);
   awareness.setLocalState(null);
@@ -110,6 +119,7 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
     owners: createAwarenessOwners(),
     store,
     rules,
+    guard,
     edited: (actor) => {
       if (!context.editors.has(actor.id)) context.editors.set(actor.id, actor);
     },
@@ -117,6 +127,7 @@ export async function loadRoom(options: LoadRoomOptions): Promise<RoomLoad> {
     leave: (member) => removeMember(room, member),
     destroy: () => {
       store.cancel();
+      guard?.destroy();
       awareness.destroy();
       doc.destroy();
     },
