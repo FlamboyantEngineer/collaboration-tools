@@ -14,8 +14,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { runNpm } from './lib/npm.mjs';
-import { reportProblems, root } from './lib/script.mjs';
+import { runNpm } from '@flamboyantengineer/ui-components/tooling/lib/npm.mjs';
+import { reportProblems, root } from '@flamboyantengineer/ui-components/tooling/lib/script.mjs';
 
 const tsc = join(root, 'node_modules', 'typescript', 'bin', 'tsc');
 const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));

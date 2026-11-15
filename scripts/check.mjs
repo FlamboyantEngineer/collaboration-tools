@@ -2,7 +2,7 @@
 // Runs every check of `npm run check`. The checks of a stage run side by side and print their
 // output once each finishes; a stage starts only when every check of the one before it passed.
 
-import { startNpm } from './lib/npm.mjs';
+import { startNpm } from '@flamboyantengineer/ui-components/tooling/lib/npm.mjs';
 
 const STAGES = [
   [
