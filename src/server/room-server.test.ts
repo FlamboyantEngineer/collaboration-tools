@@ -1,4 +1,5 @@
 import { applyUpdate, Doc } from '@y/y';
+import * as decoding from 'lib0/decoding';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createManualClock, type ManualClock } from '../../test/manual-clock.js';
 import { connectToServer, settle } from '../../test/server-sockets.js';
@@ -120,6 +121,39 @@ describe('createRoomServer admission', () => {
     expect(context.server.roomCount()).toBe(1);
   });
 
+  it('COLLAB-SERVER-1.4 closes a connection whose frames before admission pass the limit', async () => {
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const server = createRoomServer({
+      host: {
+        // Admission never completes, so every frame waits.
+        auth: { admit: () => new Promise<RoomAdmission>(() => undefined) },
+        persistence: createMemoryPersistence(),
+        clock: createManualClock(),
+        logger,
+      },
+      maxPendingBytes: 1_000,
+    });
+    servers.push(server);
+    const closes: number[] = [];
+    const connection = server.connect(
+      { send: () => undefined, close: (code) => closes.push(code) },
+      { url: '/live/notes', headers: {} },
+    );
+    await settle();
+
+    connection.receive(new Uint8Array(600));
+    const afterOne = [...closes];
+    connection.receive(new Uint8Array(600));
+
+    expect(afterOne).toEqual([]);
+    // 1009, the WebSocket code for a message too big to process.
+    expect(closes).toEqual([1009]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'A connection sent too much before it was admitted.',
+      expect.objectContaining({ room: 'notes' }),
+    );
+  });
+
   it('COLLAB-SERVER-1.3 closes a URL without a room as a bad request', async () => {
     const context = setup();
     const closes: number[] = [];
@@ -234,6 +268,33 @@ describe('createRoomServer sync', () => {
     expect(beforeDrop).toBe(true);
     expect(writer.getState()).toMatchObject({ status: 'connected', hasUnconfirmedChanges: false });
     expect(text(writer.doc)).toBe('kept');
+  });
+
+  it('COLLAB-SERVER-2.3 sends a member that rejoins with deletions no extra update', async () => {
+    const context = setup();
+    const clientClock = createManualClock();
+    const writer = open(context, { clock: clientClock });
+    await settle();
+    writer.doc.get('text').insert(0, 'abc');
+    writer.doc.get('text').delete(1, 1);
+    await settle();
+    context.sockets.sockets[0]?.drop();
+    await settle();
+    clientClock.advance(0);
+    await settle();
+
+    const socket = context.sockets.sockets[1];
+    // The message type of each frame, with the sync message type for sync frames.
+    const kinds = (socket?.received ?? []).map((frame) => {
+      const decoder = decoding.createDecoder(frame);
+      const type = decoding.readVarUint(decoder);
+      return type === 0 ? `sync${decoding.readVarUint(decoder)}` : `t${type}`;
+    });
+
+    expect(writer.getState()).toMatchObject({ status: 'connected', hasUnconfirmedChanges: false });
+    // Access, save status, the room's sync step 1 and the answer to the member's step 1. The member's
+    // step 2 holds deletions the room has already; nothing acknowledges it.
+    expect(kinds).toEqual(['t2', 't6', 'sync0', 'sync1']);
   });
 
   it('COLLAB-SERVER-2.4 closes a member that sends a frame it cannot read', async () => {

@@ -49,6 +49,8 @@ export interface ConnectionDependencies {
   host: ResolvedRoomHost;
   registry: RoomRegistry;
   onStateless: ((message: RoomStatelessMessage) => void) | undefined;
+  /** The most a connection may send before it joins its room, as `RoomServerOptions` says. */
+  maxPendingBytes: number;
   /** Called each time a connection joins its room. */
   onJoin(): void;
   /** Shutdown callbacks for every connection, including those awaiting admission. */
@@ -67,8 +69,9 @@ const REFUSAL_CODES: Readonly<Record<RoomRefusal, number>> = {
 interface Connection {
   socket: RoomServerSocket;
   dependencies: ConnectionDependencies;
-  /** Frames that arrived before the room was ready. */
+  /** Frames that arrived before the room was ready, and what they count against the limit. */
   queue: Uint8Array[];
+  queuedBytes: number;
   context: MemberContext | null;
   closed: boolean;
   onClosed(): void;
@@ -232,6 +235,25 @@ async function join(connection: Connection, request: RoomServerRequest) {
   }
 }
 
+/** Each waiting frame also costs memory beyond its bytes. */
+const QUEUED_FRAME_OVERHEAD = 64;
+/** The WebSocket close code for a message too big to process. */
+const TOO_BIG = 1009;
+
+/** Holds a frame until the connection joins, closing a connection that sends too much meanwhile. */
+function queueFrame(connection: Connection, request: RoomServerRequest, frame: Uint8Array) {
+  connection.queuedBytes += frame.byteLength + QUEUED_FRAME_OVERHEAD;
+  if (connection.queuedBytes <= connection.dependencies.maxPendingBytes) {
+    connection.queue.push(frame);
+    return;
+  }
+  connection.dependencies.host.logger.warn('A connection sent too much before it was admitted.', {
+    room: parseRoomUrl(request.url)?.room ?? null,
+    bytes: connection.queuedBytes,
+  });
+  close(connection, TOO_BIG, 'too-large');
+}
+
 /**
  * Admits a connection, joins it to its room and reads its frames. Frames that arrive before the
  * room is ready wait in order.
@@ -246,6 +268,7 @@ export function connectMember(
     socket,
     dependencies,
     queue: [],
+    queuedBytes: 0,
     context: null,
     closed: false,
     stopReauthorization: null,
@@ -260,7 +283,7 @@ export function connectMember(
     receive: (frame) => {
       if (connection.closed) return;
       if (connection.context) read(connection, frame, connection.context);
-      else connection.queue.push(frame);
+      else queueFrame(connection, request, frame);
     },
     closed: () => {
       connection.closed = true;

@@ -42,11 +42,13 @@ function isEmptyIds(ids: ContentIds): boolean {
 }
 
 /**
- * Applies a member's update once the room's rules allow it. The room echoes what it changes to every member; what it held
- * already, such as an update a client resends after losing the echo, is acknowledged to the
- * sender alone, so the sender learns the room holds it.
+ * Applies a member's update once the room's rules allow it. The room echoes what it changes to
+ * every member. What an update message held already, such as one a client resends after losing the
+ * echo, is acknowledged to the sender alone, so the sender learns the room holds it. A sync step 2
+ * is not: it repeats every deletion the member knows, and the client resends what is still
+ * unconfirmed as an update once the handshake completes.
  */
-function applyMemberUpdate(context: MemberContext, update: Uint8Array) {
+function applyMemberUpdate(context: MemberContext, update: Uint8Array, acknowledgeHeld: boolean) {
   const { room, member } = context;
   const decision = checkWrite(room.rules, {
     room: room.name,
@@ -69,6 +71,7 @@ function applyMemberUpdate(context: MemberContext, update: Uint8Array) {
     room.doc.off('update', watch);
   }
   if (applied) room.edited(context.actor);
+  if (!acknowledgeHeld) return;
   const sent = createContentIdsFromUpdate(update);
   const held = applied ? excludeContentIds(sent, createContentIdsFromUpdate(applied)) : sent;
   if (isEmptyIds(held)) return;
@@ -89,7 +92,9 @@ function readSync(decoder: decoding.Decoder, context: MemberContext) {
   }
   const update = decoding.readVarUint8Array(decoder);
   // A read-only connection's changes never reach the room.
-  if (context.access === 'read-write') applyMemberUpdate(context, update);
+  if (context.access === 'read-write') {
+    applyMemberUpdate(context, update, syncType === syncProtocol.messageYjsUpdate);
+  }
 }
 
 /** Applies the awareness entries the member may write and relays them to the other members. */

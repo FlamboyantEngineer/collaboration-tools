@@ -21,6 +21,8 @@ export interface RoomRegistry {
   release(room: LiveRoom): void;
   /** The loaded rooms. */
   rooms(): LiveRoom[];
+  /** The loaded room of that name, if any. */
+  find(name: string): LiveRoom | undefined;
   /** The number of rooms loaded or loading. */
   size(): number;
   /** Stores every room and unloads them all. */
@@ -131,6 +133,7 @@ export function createRoomRegistry(options: RoomRegistryOptions): RoomRegistry {
     acquire,
     release,
     rooms: () => [...byRoom.keys()],
+    find: (name) => entries.get(name)?.room ?? undefined,
     size: () => entries.size,
     close,
   };

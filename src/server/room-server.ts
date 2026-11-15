@@ -28,6 +28,11 @@ export interface RoomServerOptions {
    * 10000 ms.
    */
   keepaliveMs?: number | undefined;
+  /**
+   * The most a connection may send before it is admitted and joined; frames wait meanwhile, each
+   * counting its length plus 64 bytes. Above it the socket closes with 1009. Defaults to 4 MiB.
+   */
+  maxPendingBytes?: number | undefined;
   /** Receives every stateless message a member sends. */
   onStateless?: ((message: RoomStatelessMessage) => void) | undefined;
 }
@@ -104,6 +109,7 @@ export function createRoomServer(options: RoomServerOptions): RoomServer {
     host,
     registry,
     onStateless: options.onStateless,
+    maxPendingBytes: options.maxPendingBytes ?? 4 * 1024 * 1024,
     onJoin: () => startKeepalive(),
     connections: new Set<() => void>(),
   };
@@ -148,10 +154,7 @@ export function createRoomServer(options: RoomServerOptions): RoomServer {
     connect,
     openRoom,
     broadcastStateless: (room, payload) => {
-      registry
-        .rooms()
-        .find((live) => live.name === room)
-        ?.broadcast(encodeStatelessMessage(payload));
+      registry.find(room)?.broadcast(encodeStatelessMessage(payload));
     },
     flush: async () => {
       await Promise.all(registry.rooms().map((room) => room.store.flush()));

@@ -25,6 +25,13 @@ A URL that names no room shall close the socket with `CLOSE_CODES.badRequest` (4
 Implementation: `src/server/server-connection.ts`, `src/server/room-registry.ts`
 Verification: `src/server/room-server.test.ts`, `src/server/authorization.test.ts`
 
+### COLLAB-SERVER-1.4 - Frames before admission
+
+Frames that wait for admission and the room's load shall count their length plus 64 bytes each against `maxPendingBytes` (default 4 MiB). A connection whose waiting frames pass it shall be logged and closed with 1009, the WebSocket code for a message too big to process, and its frames discarded.
+
+Implementation: `src/server/server-connection.ts`, `src/server/room-server.ts`
+Verification: `src/server/room-server.test.ts`
+
 ## COLLAB-SERVER-2 - Sync
 
 ### COLLAB-SERVER-2.1 - Relaying changes
@@ -43,7 +50,7 @@ Verification: `src/server/room-server.test.ts`
 
 ### COLLAB-SERVER-2.3 - Acknowledging held content
 
-When an update a member sends holds content the room has already, such as an update a client resends after losing its echo, the server shall send that member alone the room's copy of that content, so the client can confirm it.
+When an update message a member sends holds content the room has already, such as an update a client resends after losing its echo, the server shall send that member alone the room's copy of that content, so the client can confirm it. A sync step 2 shall not be acknowledged this way: it repeats every deletion the member knows, and the client resends what is still unconfirmed as an update once the handshake completes (COLLAB-CLIENT-3.2), so a member joining a document with deletions gets no extra frame.
 
 Implementation: `src/server/member-frames.ts`
 Verification: `src/server/room-server.test.ts`
