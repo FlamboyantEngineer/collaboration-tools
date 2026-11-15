@@ -136,3 +136,38 @@ it('COLLAB-SERVER-4.2 does not schedule a retry after cancellation during a stor
   await expect(receipt).resolves.toBe(false);
   expect(clock.pendingDelays()).toEqual([]);
 });
+
+it('COLLAB-SERVER-4.2 runs one store at a time when a flush starts between two stores', async () => {
+  const clock = createManualClock();
+  let running = 0;
+  let mostAtOnce = 0;
+  let stores = 0;
+  const store = createStoreScheduler({
+    clock,
+    debounceMs: 100,
+    maxDebounceMs: 250,
+    retryInitialMs: 50,
+    retryMaxMs: 150,
+    store: async () => {
+      stores += 1;
+      running += 1;
+      mostAtOnce = Math.max(mostAtOnce, running);
+      // A change made during the first store.
+      if (stores === 1) store.markDirty();
+      await settle();
+      running -= 1;
+      return 'stored';
+    },
+    // The first store has ended and the next has not started: another caller flushes.
+    onStatus: (status) => {
+      if (status === 'unsaved' && stores === 1) void store.flush();
+    },
+  });
+  store.markDirty();
+  await store.flush();
+  await settle();
+
+  expect(mostAtOnce).toBe(1);
+  expect(stores).toBe(2);
+  expect(store.isDirty()).toBe(false);
+});

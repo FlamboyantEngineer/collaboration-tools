@@ -150,6 +150,39 @@ describe('room storage', () => {
     expect(server.roomCount()).toBe(0);
   });
 
+  it('COLLAB-SERVER-4.3 stores a change a hold made and released while the room stored before unloading', async () => {
+    const memory = createMemoryPersistence();
+    const gate = createDeferred<undefined>();
+    let gated = false;
+    const stored: string[] = [];
+    const persistence: RoomPersistence = {
+      load: (input) => memory.load(input),
+      store: async (input) => {
+        stored.push(decoded(input.update));
+        if (gated) await gate.promise;
+        return memory.store(input);
+      },
+    };
+    const { server } = serve(persistence);
+
+    const first = await server.openRoom('notes');
+    first.doc.get('text').insert(0, 'one');
+    gated = true;
+    first.release();
+    await settle();
+    const second = await server.openRoom('notes');
+    second.doc.get('text').insert(3, ' two');
+    second.release();
+    gated = false;
+    gate.resolve(undefined);
+    await settle();
+
+    expect(decoded(memory.peek('notes')?.update)).toBe('one two');
+    // The new room's generation, the store before unloading, and the change made meanwhile.
+    expect(stored).toEqual(['', 'one', 'one two']);
+    expect(server.roomCount()).toBe(0);
+  });
+
   it('COLLAB-SERVER-4.3 keeps a room whose storage fails loaded, retrying, until it stores', async () => {
     const { persistence, script } = scriptedPersistence({ status: 'missing' });
     const { server, clock, open } = serve(persistence);
