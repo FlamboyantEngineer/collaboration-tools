@@ -330,6 +330,27 @@ describe('createRoomServer awareness', () => {
     expect(second.awareness.getStates().has(first.awareness.clientID)).toBe(false);
   });
 
+  it('COLLAB-SERVER-3.4 expires presence a member stopped renewing on the room clock, and tells the others', async () => {
+    const context = setup();
+    const first = open(context);
+    const second = open(context);
+    await settle();
+    first.awareness.setLocalStateField('name', 'Ada');
+    await settle();
+
+    context.clock.advance(20_000);
+    first.awareness.setLocalStateField('name', 'Ada L.');
+    await settle();
+    context.clock.advance(20_000);
+    await settle();
+    const renewed = second.awareness.getStates().get(first.awareness.clientID);
+    context.clock.advance(12_000);
+    await settle();
+
+    expect(renewed).toEqual({ name: 'Ada L.' });
+    expect(second.awareness.getStates().has(first.awareness.clientID)).toBe(false);
+  });
+
   it('COLLAB-SERVER-3.2 takes a reconnecting member’s presence again', async () => {
     const context = setup();
     const clientClock = createManualClock();
