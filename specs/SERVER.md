@@ -43,7 +43,7 @@ Verification: `src/server/room-server.test.ts`
 
 ### COLLAB-SERVER-2.3 - Acknowledging held content
 
-When an update a member sends holds content the room has already, such as an update a client resends after losing its echo, the server shall send that member alone the room's copy of that content, so the client can confirm it.
+When an update message a member sends holds content the room has already, such as an update a client resends after losing its echo, the server shall send that member alone the room's copy of that content, so the client can confirm it. A sync step 2 shall not be acknowledged this way: it repeats every deletion the member knows, and the client resends what is still unconfirmed as an update once the handshake completes (COLLAB-CLIENT-3.2), so a member joining a document with deletions gets no extra frame.
 
 Implementation: `src/server/member-frames.ts`
 Verification: `src/server/room-server.test.ts`

@@ -1,5 +1,6 @@
 import { Doc } from '@y/y';
 import { afterEach, describe, expect, it } from 'vitest';
+import { createManualClock } from '../../test/manual-clock.js';
 import { settle } from '../../test/server-sockets.js';
 import { createRoomProvider, type RoomProvider } from '../client/room-provider.js';
 import { createMemoryPersistence } from '../server/host/memory-persistence.js';
@@ -33,6 +34,8 @@ function join(sockets: ReturnType<typeof connectToServer>, name: string): RoomPr
     doc: new Doc(),
     getToken: () => name,
     createSocket: sockets.createSocket,
+    // A dropped socket reconnects after 0 ms; a manual clock keeps that out of the tests' settling.
+    clock: createManualClock(),
   });
   cleanups.push(() => provider.destroy());
   return provider;
