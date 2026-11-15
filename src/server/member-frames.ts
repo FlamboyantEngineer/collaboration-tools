@@ -19,7 +19,11 @@ import {
   readStorageMessage,
   type RoomAccess,
 } from '../protocol/messages.js';
-import { decodeAwarenessEntries, encodeAwarenessEntries } from './awareness-owners.js';
+import {
+  type AwarenessEntry,
+  decodeAwarenessEntries,
+  encodeAwarenessEntries,
+} from './awareness-owners.js';
 import type { RoomActor } from './host/adapters.js';
 import type { LiveRoom, RoomMember } from './live-room.js';
 import { checkWrite } from './write-rules.js';
@@ -105,6 +109,9 @@ function readAwareness(decoder: decoding.Decoder, { room, member }: MemberContex
   if (allowed.length === 0) return;
   const filtered = allowed.length === entries.length ? update : encodeAwarenessEntries(allowed);
   applyAwarenessUpdate(room.awareness, filtered, member);
+  const gone = (entry: AwarenessEntry) => entry.state === 'null';
+  room.presence.renewed(allowed.filter((entry) => !gone(entry)).map((entry) => entry.clientId));
+  room.presence.forget(allowed.filter(gone).map((entry) => entry.clientId));
   room.broadcast(encodeAwarenessFrame(filtered), member);
 }
 
