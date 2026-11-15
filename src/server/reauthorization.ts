@@ -7,7 +7,7 @@ const REFRESH_LEAD_MS = 30_000;
 /** A refresh that throws is tried again after this long, until the decision expires. */
 const REFRESH_RETRY_MS = 5_000;
 
-export interface ReauthorizationOptions {
+interface ReauthorizationOptions {
   host: ResolvedRoomHost;
   request: RoomRefreshRequest;
   expiresAt: number;

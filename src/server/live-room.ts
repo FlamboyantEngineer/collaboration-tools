@@ -60,7 +60,7 @@ export interface LiveRoom {
 
 export type RoomLoad = { ok: true; room: LiveRoom } | { ok: false; error: Error };
 
-export interface LoadRoomOptions {
+interface LoadRoomOptions {
   name: string;
   host: ResolvedRoomHost;
   timing: StoreTiming;

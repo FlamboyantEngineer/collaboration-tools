@@ -4,7 +4,7 @@ import type { RoomSaveStatus } from '../protocol/messages.js';
 /** What one store attempt reported. `retry` asks for another attempt after a backoff. */
 export type StoreOutcome = 'stored' | 'retry' | 'abandoned';
 
-export interface StoreSchedulerOptions {
+interface StoreSchedulerOptions {
   clock: RoomClock;
   /** A change is stored this long after the last one. */
   debounceMs: number;

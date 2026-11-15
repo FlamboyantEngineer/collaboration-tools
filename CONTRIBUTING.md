@@ -29,7 +29,7 @@ Releases are `v<version>` git tags, installed by hosts as git dependencies. A ho
 Code follows [docs/CODING-GUIDELINES.md](docs/CODING-GUIDELINES.md). In addition:
 
 - **Host adapters only.** Identity, permissions, storage, logging, configuration and time come from the host's adapters. No globals, no singletons, no environment variables and no browser storage in library source.
-- **Neutral wording.** Code, comments, docs, specs, fixtures, tests and package metadata never name a host application or its domain vocabulary. `npm run check:references` scans every authored file and path against the encoded denylist that ui-components shares with every library built on it (`tooling/reference-denylist.json` there). To add a term, add the output of `npx ui-components-tooling check-references --encode '<regex>'` to that list in ui-components. `check:specs` and `check:structure` are shared the same way; this repository's settings are in `tooling.config.mjs`.
+- **Neutral wording.** Code, comments, docs, specs, fixtures, tests and package metadata never name a host application or its domain vocabulary. `npm run check:references` scans every authored file and path against the encoded denylist that ui-components shares with every library built on it (`tooling/reference-denylist.json` there). To add a term, add the output of `npx ui-components-tooling check-references --encode '<regex>'` to that list in ui-components. `check:specs`, `check:structure` and `check:exports` (exports nothing outside their file uses; `--fix` drops them) are shared the same way; this repository's settings are in `tooling.config.mjs`.
 
 ## Specs and tests
 

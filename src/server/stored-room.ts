@@ -13,7 +13,7 @@ import type { ResolvedRoomHost } from './host/host.js';
 import type { StoreOutcome } from './store-scheduler.js';
 
 /** A room's document as storage gave it, and the revision its next store builds on. */
-export interface OpenedDoc {
+interface OpenedDoc {
   doc: Doc;
   baseRevision: string | null;
   version: StoredRoomVersion | null;
@@ -21,7 +21,7 @@ export interface OpenedDoc {
   newGeneration: RoomGenerationReason | null;
 }
 
-export type DocLoad = { ok: true; opened: OpenedDoc } | { ok: false; error: Error };
+type DocLoad = { ok: true; opened: OpenedDoc } | { ok: false; error: Error };
 
 /** What storing a room reads and changes. */
 export interface RoomStoreContext {

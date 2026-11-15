@@ -12,6 +12,7 @@ const STAGES = [
     'check:references',
     'check:specs',
     'check:structure',
+    'check:exports',
     'build',
   ],
   ['test', 'check:public-types', 'check:package'],

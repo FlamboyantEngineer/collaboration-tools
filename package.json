@@ -64,6 +64,7 @@
     "check:references": "ui-components-tooling check-references",
     "check:specs": "ui-components-tooling check-specs",
     "check:structure": "ui-components-tooling check-structure",
+    "check:exports": "ui-components-tooling check-exports",
     "check:package": "node scripts/check-package.mjs",
     "check:public-types": "node scripts/check-public-types.mjs",
     "check:git-install": "node scripts/check-git-install.mjs",
