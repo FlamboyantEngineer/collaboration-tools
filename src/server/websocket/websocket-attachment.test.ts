@@ -8,7 +8,12 @@ import type { RoomSocketFactory } from '../../client/room-socket.js';
 import { CLOSE_CODES } from '../../protocol/messages.js';
 import { createMemoryPersistence } from '../host/memory-persistence.js';
 import { createRoomServer, type RoomServer } from '../room-server.js';
-import { attachRoomServer, type RoomServerAttachment } from './websocket-attachment.js';
+import {
+  attachRoomServer,
+  type AttachRoomServerOptions,
+  type RoomServerAttachment,
+  type SentFrame,
+} from './websocket-attachment.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 
@@ -21,6 +26,7 @@ async function listen(
   pingIntervalMs?: number,
   maxBufferedBytes?: number,
   maxPayloadBytes = 1024,
+  extra: Partial<AttachRoomServerOptions> = {},
 ) {
   const http: Server = createServer();
   const attachment: RoomServerAttachment = attachRoomServer(rooms, {
@@ -29,6 +35,7 @@ async function listen(
     pingIntervalMs,
     maxPayloadBytes,
     maxBufferedBytes,
+    ...extra,
   });
   await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
   cleanups.push(() => new Promise<void>((resolve) => http.close(() => resolve())));
@@ -167,4 +174,67 @@ it('COLLAB-SERVER-6.2 derives the default outgoing limit from the accepted incom
   expect(await largeFrame).toBeGreaterThan(5 * 1024 * 1024);
   expect(socket.readyState).toBe(WebSocket.OPEN);
   socket.terminate();
+});
+
+// The extensions the server agreed to with a raw client offering compression.
+async function negotiated(endpoint: string): Promise<string> {
+  const socket = new WebSocket(`${endpoint}/notes`, { perMessageDeflate: true });
+  cleanups.push(() => socket.terminate());
+  const agreed = new Promise<string>((resolve) =>
+    socket.on('upgrade', (response) => {
+      resolve(String(response.headers['sec-websocket-extensions'] ?? ''));
+    }),
+  );
+  await new Promise((resolve) => socket.on('open', resolve));
+  return agreed;
+}
+
+it('COLLAB-SERVER-6.3 negotiates no compression unless the operator turns it on', async () => {
+  const plain = await listen(serve());
+  expect(await negotiated(plain.endpoint)).toBe('');
+
+  const compressed = await listen(serve(), undefined, undefined, 1024 * 1024, {
+    compression: {},
+  });
+  const extensions = await negotiated(compressed.endpoint);
+  expect(extensions).toContain('permessage-deflate');
+  expect(extensions).toContain('server_no_context_takeover');
+  expect(extensions).toContain('client_no_context_takeover');
+  // Rooms still sync through compressed sockets.
+  const first = open(compressed.endpoint);
+  const second = open(compressed.endpoint);
+  await waitFor(() => first.getState().synced && second.getState().synced);
+  first.doc.get('text').insert(0, 'x'.repeat(10_000));
+  await waitFor(() => second.doc.get('text').toString().length === 10_000);
+});
+
+it('COLLAB-SERVER-6.3 caps a compressed frame by its inflated size', async () => {
+  const { endpoint } = await listen(serve(), undefined, undefined, 1024, { compression: {} });
+  const socket = new WebSocket(`${endpoint}/notes`, { perMessageDeflate: { threshold: 0 } });
+  const closed = new Promise<number>((resolve) => socket.on('close', resolve));
+  await new Promise((resolve) => socket.on('open', resolve));
+  // Zeros compress to far below the limit, but inflate to eight times it.
+  socket.send(new Uint8Array(8_192));
+  expect(await closed).toBe(1009);
+});
+
+it('COLLAB-SERVER-6.4 reports each frame written, by type and uncompressed size, per recipient', async () => {
+  const sent: SentFrame[] = [];
+  const { endpoint } = await listen(serve(), undefined, undefined, 1024 * 1024, {
+    compression: { thresholdBytes: 64 },
+    onFrameSent: (frame) => sent.push(frame),
+  });
+  const first = open(endpoint);
+  const second = open(endpoint);
+  await waitFor(() => first.getState().synced && second.getState().synced);
+  const types = new Set(sent.map((frame) => frame.type));
+  expect([...types]).toEqual(expect.arrayContaining(['sync-step1', 'sync-step2']));
+
+  sent.splice(0);
+  first.doc.get('text').insert(0, 'y'.repeat(5_000));
+  await waitFor(() => sent.filter((frame) => frame.type === 'sync-update').length >= 2);
+  // The echo to the writer and the update to the other reader, each at its uncompressed size.
+  const updates = sent.filter((frame) => frame.type === 'sync-update');
+  expect(updates.length).toBeGreaterThanOrEqual(2);
+  for (const update of updates) expect(update.bytes).toBeGreaterThan(5_000);
 });
