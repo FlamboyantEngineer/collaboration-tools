@@ -88,6 +88,11 @@ export interface RoomGuardedChange extends RoomWriteChange {
 /** A room-scoped validator observing a persistent shadow. */
 export interface RoomWriteGuard {
   check(change: RoomGuardedChange): boolean;
+  /**
+   * Reads the shadow from scratch and says whether the guard's own kept reading still matches it.
+   * `false`, or a throw, makes the room rebuild the shadow and report the drift.
+   */
+  verify?(): boolean;
   destroy?(): void;
 }
 
@@ -103,6 +108,13 @@ export interface RoomWriteRules {
   check?: ((change: RoomWriteChange) => boolean) | undefined;
   /** Opens a validator on a shadow that holds every accepted room change. */
   openGuard?: ((shadow: Doc) => RoomWriteGuard) | undefined;
+  /**
+   * Asks the guard to `verify` its reading after this many room changes; 1 means after every
+   * change. By default only when the room goes idle.
+   */
+  verifyEvery?: number | undefined;
+  /** How long after its last change a room counts as idle and its guard verifies. Defaults to 2000 ms. */
+  verifyIdleMs?: number | undefined;
 }
 
 /** Gives each room its write rules. */
@@ -229,7 +241,12 @@ export type RoomEvent =
   /** Another writer stored the room first: the room stores nothing more and closes its members. */
   | { type: 'conflicted'; room: string }
   /** The room unloaded from memory. */
-  | { type: 'unloaded'; room: string };
+  | { type: 'unloaded'; room: string }
+  /**
+   * The guard's shadow had drifted from the room and was rebuilt from it: `counters` when their
+   * state vectors differed after a change, `reading` when the guard's `verify` failed.
+   */
+  | { type: 'guard-repaired'; room: string; reason: 'counters' | 'reading' };
 
 /**
  * Receives what happens in rooms. The library never waits for it: a listener that throws, or
