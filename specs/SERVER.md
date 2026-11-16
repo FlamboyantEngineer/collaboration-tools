@@ -177,6 +177,20 @@ The attachment shall terminate a slow consumer before an outbound frame would br
 Implementation: `src/server/websocket/websocket-attachment.ts`
 Verification: `src/server/websocket/websocket-attachment.test.ts`
 
+### COLLAB-SERVER-6.3 - Compression
+
+`attachRoomServer` shall negotiate no WebSocket extension unless the operator passes `compression`, since the upgrade is accepted before in-band authentication. With it, sockets shall negotiate per-message deflate with clients that offer it: frames below `thresholdBytes` (default 4096) sent as they are, zlib level `level` (default 3), no context takeover in either direction and at most `concurrency` (default 8) frames compressed or decompressed at once. `maxPayloadBytes` shall cap a compressed frame by its inflated size.
+
+Implementation: `src/server/websocket/websocket-attachment.ts`
+Verification: `src/server/websocket/websocket-attachment.test.ts`
+
+### COLLAB-SERVER-6.4 - Sent frame metric
+
+With `onFrameSent`, the attachment shall report every frame written to a socket, once per recipient and only once the write succeeded, with its uncompressed size in bytes and its type: `sync-step1`, `sync-step2`, `sync-update`, `awareness`, `auth`, `query-awareness`, `stateless`, `storage`, or `unknown` for a frame it cannot read. A recorder that throws changes nothing.
+
+Implementation: `src/server/websocket/websocket-attachment.ts`
+Verification: `src/server/websocket/websocket-attachment.test.ts`
+
 ## COLLAB-SERVER-7 - Authorization
 
 ### COLLAB-SERVER-7.1 - Reading an update's changes

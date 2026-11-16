@@ -1,9 +1,11 @@
 import { Buffer } from 'node:buffer';
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
+import * as syncProtocol from '@y/protocols/sync';
+import * as decoding from 'lib0/decoding';
 import { type RawData, type WebSocket, WebSocketServer } from 'ws';
 import { PLATFORM_CLOCK, type RoomClock, type RoomTimer } from '../../protocol/clock.js';
-import { CLOSE_CODES } from '../../protocol/messages.js';
+import { CLOSE_CODES, MESSAGE_TYPES } from '../../protocol/messages.js';
 import type { RoomServer } from '../room-server.js';
 
 export interface AttachRoomServerOptions {
@@ -19,6 +21,41 @@ export interface AttachRoomServerOptions {
   pingIntervalMs?: number | undefined;
   /** Defaults to the platform clock. */
   clock?: RoomClock | undefined;
+  /**
+   * Negotiates per-message compression with clients that offer it. Off by default: the upgrade is
+   * accepted before in-band authentication, so an operator turns it on only once they accept that.
+   */
+  compression?: RoomSocketCompression | undefined;
+  /** Told of each frame written to a socket, once per recipient, at its uncompressed size. */
+  onFrameSent?: ((frame: SentFrame) => void) | undefined;
+}
+
+/** How sockets compress frames, when an operator turns compression on. */
+export interface RoomSocketCompression {
+  /** Frames smaller than this many bytes are sent as they are. Defaults to 4096. */
+  thresholdBytes?: number | undefined;
+  /** The zlib level, 0 to 9. Defaults to 3. */
+  level?: number | undefined;
+  /** How many frames compress or decompress at once. Defaults to 8. */
+  concurrency?: number | undefined;
+}
+
+/** What a frame written to a socket carries. */
+export type SentFrameType =
+  | 'sync-step1'
+  | 'sync-step2'
+  | 'sync-update'
+  | 'awareness'
+  | 'auth'
+  | 'query-awareness'
+  | 'stateless'
+  | 'storage'
+  | 'unknown';
+
+/** A frame written to a socket: what it carries and its uncompressed size in bytes. */
+export interface SentFrame {
+  type: SentFrameType;
+  bytes: number;
 }
 
 /** Stops accepting room upgrades. */
@@ -32,13 +69,61 @@ function toBytes(data: RawData): Uint8Array {
   return data instanceof ArrayBuffer ? new Uint8Array(data) : data;
 }
 
+const SYNC_TYPES: Readonly<Record<number, SentFrameType>> = {
+  [syncProtocol.messageYjsSyncStep1]: 'sync-step1',
+  [syncProtocol.messageYjsSyncStep2]: 'sync-step2',
+  [syncProtocol.messageYjsUpdate]: 'sync-update',
+};
+
+const MESSAGE_KINDS: Readonly<Record<number, SentFrameType>> = {
+  [MESSAGE_TYPES.awareness]: 'awareness',
+  [MESSAGE_TYPES.auth]: 'auth',
+  [MESSAGE_TYPES.queryAwareness]: 'query-awareness',
+  [MESSAGE_TYPES.stateless]: 'stateless',
+  [MESSAGE_TYPES.storage]: 'storage',
+};
+
+/** What an outgoing frame carries, read from its message type and, for sync, its step. */
+function sentFrameType(frame: Uint8Array): SentFrameType {
+  try {
+    const decoder = decoding.createDecoder(frame);
+    const type = decoding.readVarUint(decoder);
+    if (type !== MESSAGE_TYPES.sync) return MESSAGE_KINDS[type] ?? 'unknown';
+    return SYNC_TYPES[decoding.readVarUint(decoder)] ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+function perMessageDeflate(compression: RoomSocketCompression | undefined) {
+  if (!compression) return false;
+  return {
+    threshold: compression.thresholdBytes ?? 4096,
+    zlibDeflateOptions: { level: compression.level ?? 3 },
+    concurrencyLimit: compression.concurrency ?? 8,
+    serverNoContextTakeover: true,
+    clientNoContextTakeover: true,
+  };
+}
+
+// A recorder that throws changes nothing about the socket.
+function reportSent(onFrameSent: ((frame: SentFrame) => void) | undefined, frame: Uint8Array) {
+  if (!onFrameSent) return;
+  try {
+    onFrameSent({ type: sentFrameType(frame), bytes: frame.byteLength });
+  } catch {
+    // Metrics never change what a socket does.
+  }
+}
+
 function bindSocket(options: {
   socket: WebSocket;
   request: IncomingMessage;
   rooms: RoomServer;
   maxBufferedBytes: number;
+  onFrameSent: ((frame: SentFrame) => void) | undefined;
 }) {
-  const { socket, request, rooms, maxBufferedBytes } = options;
+  const { socket, request, rooms, maxBufferedBytes, onFrameSent } = options;
   let alive = true;
   socket.on('pong', () => (alive = true));
   const connection = rooms.connect(
@@ -52,6 +137,7 @@ function bindSocket(options: {
         }
         socket.send(frame, (error) => {
           if (error) socket.terminate();
+          else reportSent(onFrameSent, frame);
         });
       },
       close: (code, reason) => socket.close(code, reason),
@@ -90,6 +176,7 @@ export function attachRoomServer(
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: options.maxPayloadBytes ?? 64 * 1024 * 1024,
+    perMessageDeflate: perMessageDeflate(options.compression),
   });
   const pings = new Map<WebSocket, () => void>();
   let timer: RoomTimer | null = null;
@@ -104,7 +191,8 @@ export function attachRoomServer(
     if (!path.startsWith(prefix)) return;
     wss.handleUpgrade(request, stream, head, (socket) => {
       socket.binaryType = 'nodebuffer';
-      pings.set(socket, bindSocket({ socket, request, rooms, maxBufferedBytes }).ping);
+      const { onFrameSent } = options;
+      pings.set(socket, bindSocket({ socket, request, rooms, maxBufferedBytes, onFrameSent }).ping);
       socket.on('close', () => pings.delete(socket));
       timer ??= clock.setTimeout(pingAll, pingIntervalMs);
     });
