@@ -117,9 +117,25 @@ function destroyRoom(room: LiveRoom) {
   }
 }
 
+/** How long after its last change a room's guard verifies its reading by default. */
+const GUARD_IDLE_MS = 2000;
+
 function createRoomRules(host: ResolvedRoomHost, name: string, doc: Doc) {
   const rules = host.permissions.rulesFor(name) ?? {};
-  const guard = rules.openGuard ? openShadowGuard(doc, rules.openGuard) : null;
+  const guard = rules.openGuard
+    ? openShadowGuard(doc, rules.openGuard, {
+        clock: host.clock,
+        verifyEvery: rules.verifyEvery,
+        idleMs: rules.verifyIdleMs ?? GUARD_IDLE_MS,
+        onRepair: (reason) => {
+          host.logger.warn('The room’s write guard had drifted and was rebuilt.', {
+            room: name,
+            reason,
+          });
+          emitEvent(host, { type: 'guard-repaired', room: name, reason });
+        },
+      })
+    : null;
   return { rules, guard };
 }
 

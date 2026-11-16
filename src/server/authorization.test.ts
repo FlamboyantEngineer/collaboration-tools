@@ -27,6 +27,7 @@ const ADMISSIONS: Record<string, RoomAdmission> = {
 
 function serve(rules: RoomWriteRules | null, auth?: Partial<RoomAuth>, clock?: ManualClock) {
   const logger = { warn: vi.fn(), error: vi.fn() };
+  const events = { emit: vi.fn() };
   const server = createRoomServer({
     host: {
       auth: {
@@ -37,6 +38,7 @@ function serve(rules: RoomWriteRules | null, auth?: Partial<RoomAuth>, clock?: M
       persistence: createMemoryPersistence(),
       permissions: { rulesFor: () => rules },
       logger,
+      events,
       clock: clock ?? createManualClock(),
     },
   });
@@ -54,7 +56,7 @@ function serve(rules: RoomWriteRules | null, auth?: Partial<RoomAuth>, clock?: M
     providers.push(provider);
     return provider;
   };
-  return { server, sockets, open, logger };
+  return { server, sockets, open, logger, events };
 }
 
 const RULES: RoomWriteRules = {
@@ -176,6 +178,40 @@ describe('room write rules', () => {
     // One shadow at load, and one rebuilt from the room after the refusal.
     expect(opened.map((shadow) => shadow.isDestroyed)).toEqual([true, false]);
     handle.release();
+  });
+
+  it('COLLAB-SERVER-7.6 rebuilds a guard whose reading drifted and reports it to the host', async () => {
+    let opens = 0;
+    let drifted = false;
+    const rules: RoomWriteRules = {
+      verifyEvery: 1,
+      openGuard: () => {
+        opens++;
+        return { check: () => true, verify: () => !drifted };
+      },
+    };
+    const { open, logger, events } = serve(rules);
+    const writer = open('editor');
+    await settle();
+    writer.doc.get('body').insert(0, 'fine');
+    await settle();
+    expect(opens).toBe(1);
+
+    drifted = true;
+    writer.doc.get('body').insert(4, '!');
+    await settle();
+
+    expect(opens).toBe(2);
+    expect(events.emit).toHaveBeenCalledWith({
+      type: 'guard-repaired',
+      room: 'notes',
+      reason: 'reading',
+    });
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('drifted'), {
+      room: 'notes',
+      reason: 'reading',
+    });
+    expect(writer.getState()).toMatchObject({ status: 'connected', hasUnconfirmedChanges: false });
   });
 
   it('COLLAB-SERVER-7.3 drops an update that builds on missing content and asks for the rest', async () => {
