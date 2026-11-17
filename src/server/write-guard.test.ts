@@ -262,4 +262,66 @@ describe('openShadowGuard', () => {
     guard.destroy();
     expect(clock.pendingDelays()).toEqual([]);
   });
+
+  it('COLLAB-SERVER-7.6 rebuilds and reports a shadow that differs from the room by a deletion alone', () => {
+    const room = new Doc();
+    room.get('body').insert(0, 'seed text');
+    const clock = createManualClock();
+    const shadows: Doc[] = [];
+    const repairs: ShadowDrift[] = [];
+    const guard = openShadowGuard(
+      room,
+      (shadow) => {
+        shadows.push(shadow);
+        // A guard whose reading agrees with its shadow, whatever the shadow holds.
+        return { check: () => true, verify: () => true };
+      },
+      quietCheck(repairs, { clock, idleMs: 500 }),
+    );
+    // The shadow loses a word the room keeps: a deletion changes no state vector.
+    shadows[0]?.get('body').delete(0, 5);
+    take(
+      room,
+      changeOf(room, (copy) => copy.get('body').insert(9, '!')),
+    );
+    expect(repairs).toEqual([]);
+    clock.advance(500);
+    expect(repairs).toEqual(['content']);
+    expect(shadows[1]?.get('body').toString()).toBe('seed text!');
+    guard.destroy();
+  });
+
+  it('COLLAB-SERVER-7.6 verifies a busy room by count by default, and at the latest ten idle periods in', () => {
+    const room = new Doc();
+    const clock = createManualClock();
+    let verified = 0;
+    const guard = openShadowGuard(
+      room,
+      () => ({
+        check: () => true,
+        verify: () => {
+          verified++;
+          return true;
+        },
+      }),
+      quietCheck([], { clock, idleMs: 500 }),
+    );
+    const edit = () =>
+      take(
+        room,
+        changeOf(room, (copy) => copy.get('body').insert(0, 'x')),
+      );
+    // A change every 400 ms never lets the room go idle: ten idle periods after the first, it
+    // verifies anyway.
+    for (let step = 0; step < 14; step++) {
+      edit();
+      clock.advance(400);
+    }
+    expect(verified).toBe(1);
+    // With changes faster than that, every hundredth change verifies.
+    verified = 0;
+    for (let step = 0; step < 100; step++) edit();
+    expect(verified).toBe(1);
+    guard.destroy();
+  });
 });
