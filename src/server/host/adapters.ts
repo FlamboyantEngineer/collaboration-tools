@@ -109,11 +109,15 @@ export interface RoomWriteRules {
   /** Opens a validator on a shadow that holds every accepted room change. */
   openGuard?: ((shadow: Doc) => RoomWriteGuard) | undefined;
   /**
-   * Asks the guard to `verify` its reading after this many room changes; 1 means after every
-   * change. By default only when the room goes idle.
+   * Verifies the guard's shadow and reading after this many room changes; 1 means after every
+   * change. Defaults to 100.
    */
   verifyEvery?: number | undefined;
-  /** How long after its last change a room counts as idle and its guard verifies. Defaults to 2000 ms. */
+  /**
+   * How long after its last change a room counts as idle and its guard verifies; a busy room
+   * verifies at the latest ten times this long after its first change since the last verification.
+   * Defaults to 2000 ms.
+   */
   verifyIdleMs?: number | undefined;
 }
 
@@ -246,7 +250,7 @@ export type RoomEvent =
    * The guard's shadow had drifted from the room and was rebuilt from it: `counters` when their
    * state vectors differed after a change, `reading` when the guard's `verify` failed.
    */
-  | { type: 'guard-repaired'; room: string; reason: 'counters' | 'reading' };
+  | { type: 'guard-repaired'; room: string; reason: 'counters' | 'content' | 'reading' };
 
 /**
  * Receives what happens in rooms. The library never waits for it: a listener that throws, or

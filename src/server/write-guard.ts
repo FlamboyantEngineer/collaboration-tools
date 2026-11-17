@@ -1,4 +1,12 @@
-import { applyUpdate, Doc, encodeStateAsUpdate, encodeStateVector, type Transaction } from '@y/y';
+import {
+  applyUpdate,
+  Doc,
+  encodeStateAsUpdate,
+  encodeStateVector,
+  equalSnapshots,
+  snapshot,
+  type Transaction,
+} from '@y/y';
 import type { RoomClock, RoomTimer } from '../protocol/clock.js';
 import type { RoomWriteChange, RoomWriteGuard } from './host/adapters.js';
 
@@ -13,15 +21,24 @@ export interface ShadowGuard {
   destroy(): void;
 }
 
-/** Why a shadow was rebuilt: its counters or the guard's own reading had drifted from the room. */
-export type ShadowDrift = 'counters' | 'reading';
+/**
+ * Why a shadow was rebuilt: its counters, its content with its deletions, or the guard's own
+ * reading had drifted from the room.
+ */
+export type ShadowDrift = 'counters' | 'content' | 'reading';
+
+/** How many room changes a guard verifies after when the host names no count. */
+const GUARD_VERIFY_EVERY = 100;
 
 /** How a guard checks itself against the room it follows (COLLAB-SERVER-7.6). */
 export interface ShadowSelfCheck {
   clock: RoomClock;
-  /** Verifies the guard's reading after this many room changes; `undefined` only on idle. */
+  /** Verifies after this many room changes; {@link GUARD_VERIFY_EVERY} by default. */
   verifyEvery?: number | undefined;
-  /** Verifies the guard's reading this long after the room's last change. */
+  /**
+   * Verifies this long after the room's last change, and at the latest ten times this long after
+   * the first change since the last verification, however busy the room.
+   */
   idleMs: number;
   /** Told after a drifted shadow was rebuilt from the room. */
   onRepair(reason: ShadowDrift): void;
@@ -58,24 +75,33 @@ function verifies(guard: RoomWriteGuard): boolean {
   }
 }
 
-/** Calls `verify` every `verifyEvery` changes and once the room has been idle for `idleMs`. */
+/**
+ * Calls `verify` every `verifyEvery` changes, once the room has been idle for `idleMs`, and at the
+ * latest ten idle periods after the first change it has not verified.
+ */
 function createVerifyCadence(selfCheck: ShadowSelfCheck, verify: () => void) {
+  const every = selfCheck.verifyEvery ?? GUARD_VERIFY_EVERY;
+  const longest = selfCheck.idleMs * 10;
   let changes = 0;
+  let since: number | null = null;
   let idle: RoomTimer | null = null;
   const cancel = () => {
     if (idle !== null) selfCheck.clock.clearTimeout(idle);
     idle = null;
   };
+  const verifyNow = () => {
+    changes = 0;
+    since = null;
+    verify();
+  };
   return {
     changed() {
-      if (selfCheck.verifyEvery !== undefined && ++changes >= selfCheck.verifyEvery) {
-        changes = 0;
-        verify();
-      }
+      since ??= selfCheck.clock.now();
       cancel();
+      if (++changes >= every || selfCheck.clock.now() - since >= longest) verifyNow();
       idle = selfCheck.clock.setTimeout(() => {
         idle = null;
-        verify();
+        verifyNow();
       }, selfCheck.idleMs);
     },
     cancel,
@@ -85,9 +111,9 @@ function createVerifyCadence(selfCheck: ShadowSelfCheck, verify: () => void) {
 /**
  * Opens a room's guard on a shadow copy of `room` (COLLAB-SERVER-7.2). Each check costs the
  * update's own size; only a refusal or a repair costs a copy of the room. After every room change
- * the shadow's state vector is compared with the room's, and every `verifyEvery` changes and on
- * idle the guard verifies its own reading (COLLAB-SERVER-7.6); a mismatch rebuilds the shadow and
- * reports it. A guard that throws when opened throws here, when the room loads.
+ * the shadow's state vector is compared with the room's; at each verification its content, with
+ * its deletions, is compared with the room's, and the guard verifies its own reading
+ * (COLLAB-SERVER-7.6). A mismatch rebuilds the shadow and reports it. A guard that throws when opened throws here, when the room loads.
  */
 export function openShadowGuard(
   room: Doc,
@@ -138,8 +164,12 @@ export function openShadowGuard(
     return guard.check({ ...change, transaction });
   }
 
-  function verifyReading() {
-    if (opened && !verifies(opened.guard)) repair('reading');
+  // State vectors count insertions only: a shadow that missed a deletion has the room's. Its
+  // snapshot, the state vector with the deletions, shows it.
+  function verifyShadow() {
+    if (!opened) return;
+    if (!equalSnapshots(snapshot(opened.shadow), snapshot(room))) repair('content');
+    else if (!verifies(opened.guard)) repair('reading');
   }
 
   const follow = (update: Uint8Array) => {
@@ -148,7 +178,7 @@ export function openShadowGuard(
     if (sameBytes(encodeStateVector(opened.shadow), encodeStateVector(room))) cadence.changed();
     else repair('counters');
   };
-  const cadence = createVerifyCadence(selfCheck, verifyReading);
+  const cadence = createVerifyCadence(selfCheck, verifyShadow);
   reopen();
   room.on('update', follow);
   return {

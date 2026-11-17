@@ -44,13 +44,15 @@ export function mutateRoom(
       },
     );
     if (decision.verdict !== 'allowed') return false;
-    room.edited(attribution.actor);
     const origin: RoomTransactionOrigin = {
       actor: attribution.actor,
       capabilities: new Set(attribution.capabilities),
       source: 'server',
     };
+    // The room takes the update the guard admitted before anything else runs, as a member's
+    // update is taken, so the guard's shadow never holds a change the room lacks.
     applyUpdate(room.doc, update, origin);
+    room.edited(attribution.actor);
     return true;
   } finally {
     candidate.destroy();
