@@ -39,6 +39,8 @@ export interface MemberContext {
   onStateless(payload: string): void;
   /** Called when the room's rules refuse an update, which is then dropped. */
   onRefusedWrite(types: readonly string[]): void;
+  /** Called when the room's guard refuses `update` for its merge, which is then dropped. */
+  onConflict(types: readonly string[], update: Uint8Array): void;
 }
 
 function isEmptyIds(ids: ContentIds): boolean {
@@ -65,6 +67,7 @@ function applyMemberUpdate(context: MemberContext, update: Uint8Array, acknowled
   // for everything the room lacks, its dependencies included.
   if (decision.verdict === 'incomplete') return member.send(encodeSyncStep1(room.doc));
   if (decision.verdict === 'refused') return context.onRefusedWrite(decision.types);
+  if (decision.verdict === 'conflict') return context.onConflict(decision.types, update);
   let applied: Uint8Array | null = null;
   const watch = (change: Uint8Array) => (applied = change);
   room.doc.on('update', watch);

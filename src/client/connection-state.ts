@@ -15,6 +15,8 @@ export interface RoomConnectionState {
   syncCount: number;
   /** Whether the server has not yet echoed some local change back. */
   hasUnconfirmedChanges: boolean;
+  /** How many local changes the room refused while keeping the provider connected. */
+  refusedChanges: number;
   /** The server's reason for refusing the connection, or `null`. */
   refusal: string | null;
   /**
@@ -43,6 +45,7 @@ const INITIAL_STATE: RoomConnectionState = Object.freeze({
   synced: false,
   syncCount: 0,
   hasUnconfirmedChanges: false,
+  refusedChanges: 0,
   refusal: null,
   roomGeneration: null,
   closeCode: null,

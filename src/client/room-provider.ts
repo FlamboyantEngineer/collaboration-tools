@@ -17,7 +17,9 @@ import {
   openSession,
   requestReceipt,
   type RoomConnection,
-  sendLocalUpdate,
+  type RoomReload,
+  unwatchDocs,
+  watchDoc,
 } from './room-connection.js';
 import {
   type ConnectivityEvents,
@@ -45,11 +47,12 @@ export interface RoomProviderOptions {
   /** Closes the socket while offline and reconnects when back online, such as a window. */
   connectivity?: ConnectivityEvents | null | undefined;
   /**
-   * Local changes an earlier provider had not had confirmed, from its `getUnconfirmedUpdate()`.
-   * The provider applies them to `doc` with its remote origin before it connects and tracks them
-   * until the room confirms them. Restore the earlier document first, so its generation is checked.
+   * Local changes an earlier provider had not had confirmed, from its `getUnconfirmedUpdates()`.
+   * The provider applies them to `doc` with its remote origin before it connects and tracks each
+   * as a change of its own until the room confirms it. Restore the earlier document first, so its
+   * generation is checked.
    */
-  unconfirmedUpdate?: Uint8Array | null | undefined;
+  unconfirmedUpdates?: readonly Uint8Array[] | null | undefined;
   /** Whether to connect right away. Defaults to `true`. */
   connect?: boolean | undefined;
   /** The longest wait between reconnect attempts. Defaults to 2500 ms. */
@@ -65,10 +68,19 @@ export interface RoomProviderOptions {
 
 /** A shared document kept in sync with a room on a server. */
 export interface RoomProvider {
+  /**
+   * The document the provider keeps in sync: the one it was created with until the room refuses a
+   * change of it, then the reloaded one each reload hands over (COLLAB-CLIENT-3.5).
+   */
   readonly doc: Doc;
   readonly awareness: Awareness;
   getState(): RoomConnectionState;
   subscribe(listener: RoomConnectionListener): () => void;
+  /**
+   * Listens for the document's reloads: after the room refused a change, `doc` holds the room's
+   * content and replaces `previous`, which the provider no longer sends (COLLAB-CLIENT-3.5).
+   */
+  onReload(listener: (reload: RoomReload) => void): () => void;
   /** Listens to stateless messages from the room. */
   onStateless(listener: (payload: string) => void): () => void;
   /** Sends a stateless message to the room; returns `false` when no socket is open. */
@@ -80,10 +92,10 @@ export interface RoomProvider {
    */
   whenStored(): Promise<boolean>;
   /**
-   * An update holding the local changes the room has not confirmed, or `null` when there are none.
-   * Keep it to pass as `unconfirmedUpdate` after a reload. It reads the whole document.
+   * One update for each local change the room has not confirmed, oldest first; empty when none is.
+   * Keep them to pass as `unconfirmedUpdates` after a page reload. It reads the whole document.
    */
-  getUnconfirmedUpdate(): Uint8Array | null;
+  getUnconfirmedUpdates(): Uint8Array[];
   /** Whether a transaction with this origin came from the server. */
   isRemoteOrigin(origin: unknown): boolean;
   connect(): void;
@@ -96,26 +108,31 @@ const DEFAULT_SOCKET_TIMEOUT_MS = 45_000;
 
 function createConnection(options: RoomProviderOptions): RoomConnection {
   const report = createErrorReporter(options.logger);
-  return {
+  const clock = options.clock ?? PLATFORM_CLOCK;
+  const connection: RoomConnection = {
+    // The document a reload left behind is never synced again: the URL names the current one's.
     url: () =>
       buildRoomUrl({
         endpoint: options.endpoint,
         room: options.room,
         token: options.getToken?.() ?? null,
-        generation: readRoomGeneration(options.doc),
+        generation: readRoomGeneration(connection.doc),
         params: options.params,
       }),
     doc: options.doc,
     awareness: options.awareness ?? new Awareness(options.doc),
     origin: Object.freeze({ room: options.room }),
-    clock: options.clock ?? PLATFORM_CLOCK,
+    clock,
     createSocket: options.createSocket ?? PLATFORM_SOCKET_FACTORY,
     maxBackoffMs: options.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS,
     socketTimeoutMs: options.socketTimeoutMs ?? DEFAULT_SOCKET_TIMEOUT_MS,
     report,
     store: createConnectionStateStore(report),
-    unconfirmed: createUnconfirmedUpdates(),
+    unconfirmed: createUnconfirmedUpdates(clock),
     receipts: createStoreReceipts(),
+    reload: null,
+    reloadListeners: new Set(),
+    watching: new Map(),
     statelessListeners: new Set(),
     session: null,
     shouldConnect: options.connect !== false,
@@ -124,14 +141,12 @@ function createConnection(options: RoomProviderOptions): RoomConnection {
     failedAttempts: 0,
     reconnectTimer: null,
   };
+  return connection;
 }
 
 /** Listens to the document, awareness and connectivity; returns what stops listening. */
 function listen(connection: RoomConnection, connectivity: ConnectivityEvents | null | undefined) {
-  const { doc, awareness } = connection;
-  const handleDocUpdate = (update: Uint8Array, updateOrigin: unknown) => {
-    if (updateOrigin !== connection.origin) sendLocalUpdate(connection, update);
-  };
+  const { awareness } = connection;
   const handleAwarenessUpdate = (
     changes: Record<'added' | 'updated' | 'removed', number[]>,
     updateOrigin: unknown,
@@ -151,22 +166,25 @@ function listen(connection: RoomConnection, connectivity: ConnectivityEvents | n
     connection.failedAttempts = 0;
     openSession(connection);
   };
-  doc.on('update', handleDocUpdate);
+  watchDoc(connection, connection.doc);
   awareness.on('update', handleAwarenessUpdate);
   connectivity?.addEventListener('offline', goOffline);
   connectivity?.addEventListener('online', goOnline);
   return () => {
-    doc.off('update', handleDocUpdate);
+    unwatchDocs(connection);
     awareness.off('update', handleAwarenessUpdate);
     connectivity?.removeEventListener('offline', goOffline);
     connectivity?.removeEventListener('online', goOnline);
   };
 }
 
-/** Applies and tracks local changes an earlier provider had not had confirmed. */
-function restoreUnconfirmed(connection: RoomConnection, update: Uint8Array) {
-  applyUpdate(connection.doc, update, connection.origin);
-  connection.unconfirmed.record(update, connection.clock.now());
+/** Applies and tracks local changes an earlier provider had not had confirmed, each on its own. */
+function restoreUnconfirmed(connection: RoomConnection, updates: readonly Uint8Array[]) {
+  const { doc } = connection;
+  for (const update of updates) {
+    applyUpdate(doc, update, connection.origin);
+    connection.unconfirmed.record(update, doc, true);
+  }
   connection.store.update({ hasUnconfirmedChanges: !connection.unconfirmed.isEmpty() });
 }
 
@@ -176,7 +194,8 @@ export function createRoomProvider(options: RoomProviderOptions): RoomProvider {
   const { awareness, store } = connection;
   // Before listening, so the restore is not sent twice, and before connecting, so the handshake
   // sends it and the first state reports it.
-  if (options.unconfirmedUpdate) restoreUnconfirmed(connection, options.unconfirmedUpdate);
+  if (options.unconfirmedUpdates?.length)
+    restoreUnconfirmed(connection, options.unconfirmedUpdates);
   const stopListening = listen(connection, options.connectivity);
 
   const connect = () => {
@@ -199,15 +218,25 @@ export function createRoomProvider(options: RoomProviderOptions): RoomProvider {
     stopListening();
     if (!options.awareness) awareness.destroy();
     connection.statelessListeners.clear();
+    connection.reloadListeners.clear();
   };
 
   openSession(connection);
 
   return {
-    doc: connection.doc,
+    // While a reload waits for the room's content, the writer's document is still the one shown.
+    get doc() {
+      return connection.reload?.previous ?? connection.doc;
+    },
     awareness,
     getState: store.get,
     subscribe: store.subscribe,
+    onReload: (listener) => {
+      connection.reloadListeners.add(listener);
+      return () => {
+        connection.reloadListeners.delete(listener);
+      };
+    },
     onStateless: (listener) => {
       connection.statelessListeners.add(listener);
       return () => {
@@ -216,7 +245,7 @@ export function createRoomProvider(options: RoomProviderOptions): RoomProvider {
     },
     sendStateless: (payload) => connection.session?.send(encodeStatelessMessage(payload)) ?? false,
     whenStored: () => (connection.destroyed ? Promise.resolve(false) : requestReceipt(connection)),
-    getUnconfirmedUpdate: () => connection.unconfirmed.encodeMissing(connection.doc),
+    getUnconfirmedUpdates: () => connection.unconfirmed.encodeEach(),
     isRemoteOrigin: (candidate) => candidate === connection.origin,
     connect,
     disconnect,

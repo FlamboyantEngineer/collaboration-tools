@@ -85,9 +85,17 @@ export interface RoomGuardedChange extends RoomWriteChange {
   transaction: Transaction;
 }
 
+/**
+ * A guard's answer to a change: `true` takes it and `false` refuses it for what the writer may
+ * not do. `'conflict'` refuses a change the writer may make, because merged with the room's other
+ * changes it would leave content the room may not hold; the writer stays connected
+ * (COLLAB-SERVER-7.7).
+ */
+export type RoomGuardAnswer = boolean | 'conflict';
+
 /** A room-scoped validator observing a persistent shadow. */
 export interface RoomWriteGuard {
-  check(change: RoomGuardedChange): boolean;
+  check(change: RoomGuardedChange): RoomGuardAnswer;
   /**
    * Reads the shadow from scratch and says whether the guard's own kept reading still matches it.
    * `false`, or a throw, makes the room rebuild the shadow and report the drift.
@@ -119,6 +127,17 @@ export interface RoomWriteRules {
    * Defaults to 2000 ms.
    */
   verifyIdleMs?: number | undefined;
+  /**
+   * How many updates the guard may refuse as a `'conflict'` on one connection within a window
+   * before the next such refusal cuts it off as a refused write. Defaults to 10 a minute.
+   */
+  conflictLimit?: RoomWriteRefusalLimit | undefined;
+}
+
+/** A count of refusals within a sliding window. */
+export interface RoomWriteRefusalLimit {
+  count: number;
+  windowMs: number;
 }
 
 /** Gives each room its write rules. */

@@ -1,6 +1,14 @@
 import * as awarenessProtocol from '@y/protocols/awareness';
 import * as syncProtocol from '@y/protocols/sync';
-import { applyUpdate, type Doc } from '@y/y';
+import {
+  applyUpdate,
+  type ContentIds,
+  createContentIdsFromUpdate,
+  type Doc,
+  encodeStateAsUpdate,
+  excludeContentIds,
+  intersectUpdateWithContentIds,
+} from '@y/y';
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import { encodeAwarenessFrame } from '../protocol/frames.js';
@@ -8,8 +16,10 @@ import {
   type AuthMessage,
   MESSAGE_TYPES,
   readAuthMessage,
+  readRefusedMessage,
   readStatelessMessage,
   readStorageMessage,
+  type RefusedMessage,
   type StorageMessage,
 } from '../protocol/messages.js';
 
@@ -20,16 +30,31 @@ export interface FrameContext {
   /** The transaction origin of updates the server sends. */
   origin: unknown;
   onRemoteUpdate(update: Uint8Array, isSyncStep2: boolean): void;
+  /**
+   * The local changes the room has not confirmed, which a sync step 2 leaves out: the provider
+   * sends each on its own (COLLAB-CLIENT-3.4). `null` when there are none.
+   */
+  withheld(): ContentIds | null;
   onAuth(message: AuthMessage): void;
   onStateless(payload: string): void;
   onStorage(message: StorageMessage): void;
+  onRefused(message: RefusedMessage): void;
 }
 
 function readSync(decoder: decoding.Decoder, reply: encoding.Encoder, context: FrameContext) {
   const syncType = decoding.readVarUint(decoder);
   if (syncType === syncProtocol.messageYjsSyncStep1) {
+    const missing = encodeStateAsUpdate(context.doc, decoding.readVarUint8Array(decoder));
+    const withheld = context.withheld();
+    const answer = withheld
+      ? intersectUpdateWithContentIds(
+          missing,
+          excludeContentIds(createContentIdsFromUpdate(missing), withheld),
+        )
+      : missing;
     encoding.writeVarUint(reply, MESSAGE_TYPES.sync);
-    syncProtocol.readSyncStep1(decoder, reply, context.doc);
+    encoding.writeVarUint(reply, syncProtocol.messageYjsSyncStep2);
+    encoding.writeVarUint8Array(reply, answer);
     return;
   }
   if (syncType !== syncProtocol.messageYjsSyncStep2 && syncType !== syncProtocol.messageYjsUpdate) {
@@ -71,7 +96,8 @@ export function readServerFrame(
     else if (type === MESSAGE_TYPES.storage) {
       const message = readStorageMessage(decoder);
       if (message) context.onStorage(message);
-    } else break;
+    } else if (type === MESSAGE_TYPES.refused) context.onRefused(readRefusedMessage(decoder));
+    else break;
   }
   return encoding.length(reply) > 0 ? encoding.toUint8Array(reply) : null;
 }

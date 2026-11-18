@@ -1,10 +1,10 @@
 import type { Awareness } from '@y/protocols/awareness';
-import type { Doc } from '@y/y';
+import type { ContentIds, Doc } from '@y/y';
 import type { RoomClock } from '../protocol/clock.js';
 import { encodeSyncStep1 } from '../protocol/frames.js';
-import type { AuthMessage, StorageMessage } from '../protocol/messages.js';
+import type { AuthMessage, RefusedMessage, StorageMessage } from '../protocol/messages.js';
 import type { ErrorReporter } from './connection-state.js';
-import { readServerFrame } from './frames.js';
+import { type FrameContext, readServerFrame } from './frames.js';
 import { frameBytes, type RoomSocket, type RoomSocketFactory } from './room-socket.js';
 import { createStaleSocketCheck } from './stale-socket-check.js';
 
@@ -12,6 +12,7 @@ import { createStaleSocketCheck } from './stale-socket-check.js';
 export interface SocketConfig {
   readonly createSocket: RoomSocketFactory;
   readonly clock: RoomClock;
+  /** The document the room syncs with; read anew for each frame, as a reload replaces it. */
   readonly doc: Doc;
   readonly awareness: Awareness;
   /** The transaction origin of everything the server sends. */
@@ -23,9 +24,11 @@ export interface SocketConfig {
 interface SocketEvents {
   onOpen(): void;
   onRemoteUpdate(update: Uint8Array, isSyncStep2: boolean): void;
+  withheld(): ContentIds | null;
   onAuth(message: AuthMessage): void;
   onStateless(payload: string): void;
   onStorage(message: StorageMessage): void;
+  onRefused(message: RefusedMessage): void;
   /** Runs once, when the socket closes for any reason; `code` is `null` when the client closed it. */
   onClose(code: number | null): void;
 }
@@ -63,7 +66,14 @@ export function openSocketSession(
   let open = false;
   let closed = false;
   let lastMessageAt = clock.now();
-  const frameContext = { ...config, ...events };
+  const frameContext: FrameContext = {
+    get doc() {
+      return config.doc;
+    },
+    awareness: config.awareness,
+    origin: config.origin,
+    ...events,
+  };
 
   const finish = (code: number | null) => {
     if (closed) return;

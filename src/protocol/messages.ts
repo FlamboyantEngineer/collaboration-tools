@@ -6,8 +6,8 @@ export type RoomAccess = 'read-write' | 'read-only';
 
 /**
  * The first varUint of every frame. Sync, awareness, auth and query-awareness are the y-websocket
- * message types; stateless carries a host string to or from the room, and storage reports what
- * the room has stored.
+ * message types; stateless carries a host string to or from the room, storage reports what the
+ * room has stored, and refused tells a writer the room did not take one of its updates.
  */
 export const MESSAGE_TYPES = Object.freeze({
   sync: 0,
@@ -16,6 +16,7 @@ export const MESSAGE_TYPES = Object.freeze({
   queryAwareness: 3,
   stateless: 5,
   storage: 6,
+  refused: 7,
 });
 
 /**
@@ -153,4 +154,35 @@ export function readStorageMessage(decoder: decoding.Decoder): StorageMessage | 
   if (subtype === STORAGE_SUBTYPES.receipt) return { type: 'receipt', id: value };
   const status = SAVE_STATUSES[value];
   return subtype === STORAGE_SUBTYPES.status && status ? { type: 'status', status } : null;
+}
+
+/**
+ * Why a room refused an update and kept the writer connected: `conflict` when the update, merged
+ * with the room's other writers' changes, would leave content the room may not hold.
+ */
+export type UpdateRefusalReason = 'conflict';
+
+/**
+ * A refused message: the room did not take a writer's update. `ids` is the update's own content,
+ * encoded with `encodeContentIds`, so the writer can tell which of its changes it was.
+ */
+export interface RefusedMessage {
+  reason: string;
+  ids: Uint8Array;
+}
+
+/** Encodes a whole refused frame, message type included: the reason, then the update's content ids. */
+export function encodeRefusedMessage(message: RefusedMessage): Uint8Array<ArrayBuffer> {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, MESSAGE_TYPES.refused);
+  encoding.writeVarString(encoder, message.reason);
+  encoding.writeVarUint8Array(encoder, message.ids);
+  return encoding.toUint8Array(encoder);
+}
+
+/** Reads a refused message after its message type. */
+export function readRefusedMessage(decoder: decoding.Decoder): RefusedMessage {
+  const reason = decoding.readVarString(decoder);
+  const ids = decoding.readVarUint8Array(decoder);
+  return { reason, ids };
 }

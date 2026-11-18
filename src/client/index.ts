@@ -5,6 +5,7 @@ export {
   type RoomConnectionState,
   type RoomConnectionStatus,
 } from './connection-state.js';
+export type { RoomReload } from './room-connection.js';
 export {
   createRoomProvider,
   type RoomProvider,

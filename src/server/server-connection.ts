@@ -1,6 +1,13 @@
-import { CLOSE_CODES, encodeAuthMessage, encodeStatelessMessage } from '../protocol/messages.js';
+import { createContentIdsFromUpdate, encodeContentIds } from '@y/y';
+import {
+  CLOSE_CODES,
+  encodeAuthMessage,
+  encodeRefusedMessage,
+  encodeStatelessMessage,
+} from '../protocol/messages.js';
 import { readRoomGeneration } from '../protocol/room-meta.js';
 import { parseRoomUrl } from '../protocol/room-url.js';
+import { createConflictLimit } from './conflict-limit.js';
 import type { RoomConnectionControl } from './connection-control.js';
 import {
   acceptPendingAuthorization,
@@ -56,6 +63,7 @@ function read(connection: Connection, frame: Uint8Array, context: MemberContext)
 function enter(connection: Connection, room: LiveRoom, admission: RoomAdmitted) {
   const { socket, dependencies } = connection;
   const { actor } = admission;
+  const conflicts = createConflictLimit(dependencies.host.clock, room.rules.conflictLimit);
   const member: RoomMember = {
     send: (frame) => {
       if (!connection.closed) socket.send(frame);
@@ -84,6 +92,21 @@ function enter(connection: Connection, room: LiveRoom, admission: RoomAdmitted) 
         types,
       });
       refuse(connection, 'unauthorized-write', CLOSE_CODES.forbidden);
+    },
+    // A writer whose updates keep failing to merge may be sending broken content on purpose: past
+    // the limit it is cut off as for a refused write (COLLAB-SERVER-7.7).
+    onConflict: (types, update) => {
+      if (!conflicts.record()) return context.onRefusedWrite(types);
+      dependencies.host.logger.warn(
+        'A connection sent a change that does not merge with the room.',
+        {
+          room: room.name,
+          actor: actor.id,
+          types,
+        },
+      );
+      const ids = encodeContentIds(createContentIdsFromUpdate(update));
+      member.send(encodeRefusedMessage({ reason: 'conflict', ids }));
     },
   };
   connection.context = context;

@@ -5,17 +5,21 @@ export {
   type AuthMessage,
   CLOSE_CODES,
   encodeAuthMessage,
+  encodeRefusedMessage,
   encodeStatelessMessage,
   encodeStorageMessage,
   isRoomAccess,
   MESSAGE_TYPES,
   readAuthMessage,
+  readRefusedMessage,
   readStatelessMessage,
   readStorageMessage,
+  type RefusedMessage,
   type RoomAccess,
   type RoomSaveStatus,
   STORAGE_SUBTYPES,
   type StorageMessage,
+  type UpdateRefusalReason,
 } from './messages.js';
 export { GENERATION_KEY, readRoomGeneration, ROOM_META_TYPE } from './room-meta.js';
 export {

@@ -5,11 +5,13 @@ import {
   AUTH_SUBTYPES,
   type AuthMessage,
   encodeAuthMessage,
+  encodeRefusedMessage,
   encodeStatelessMessage,
   encodeStorageMessage,
   isRoomAccess,
   MESSAGE_TYPES,
   readAuthMessage,
+  readRefusedMessage,
   readStatelessMessage,
   readStorageMessage,
   STORAGE_SUBTYPES,
@@ -31,6 +33,17 @@ describe('protocol messages', () => {
       queryAwareness: 3,
       stateless: 5,
       storage: 6,
+      refused: 7,
+    });
+  });
+
+  it('COLLAB-PROTOCOL-1.6 round-trips a refused message with its reason and content ids', () => {
+    const ids = new Uint8Array([1, 2, 3]);
+    const frame = encodeRefusedMessage({ reason: 'conflict', ids });
+
+    expect(readRefusedMessage(decoderAfterType(frame, MESSAGE_TYPES.refused))).toEqual({
+      reason: 'conflict',
+      ids,
     });
   });
 
