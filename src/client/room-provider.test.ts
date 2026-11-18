@@ -163,6 +163,7 @@ describe('createRoomProvider', () => {
       synced: false,
       syncCount: 0,
       hasUnconfirmedChanges: false,
+      refusedChanges: 0,
       refusal: null,
       roomGeneration: null,
       closeCode: null,
@@ -336,28 +337,28 @@ describe('createRoomProvider', () => {
     const server = serve();
     const offline = open(server, { connect: false });
     offline.doc.get('text').insert(0, 'offline');
-    const kept = offline.getUnconfirmedUpdate();
+    const kept = offline.getUnconfirmedUpdates();
     offline.destroy();
 
     const states: RoomConnectionState[] = [];
     const origins: boolean[] = [];
     const doc = new Doc();
     doc.on('update', (_update: Uint8Array, origin: unknown) => origins.push(origin !== null));
-    const reloaded = open(server, { doc, connect: false, unconfirmedUpdate: kept });
+    const reloaded = open(server, { doc, connect: false, unconfirmedUpdates: kept });
     reloaded.subscribe((state) => states.push(state));
     const restored = reloaded.getState().hasUnconfirmedChanges;
     const restoredText = text(reloaded);
     reloaded.connect();
     await settle();
 
-    expect(kept).not.toBeNull();
+    expect(kept).toHaveLength(1);
     expect(restored).toBe(true);
     expect(restoredText).toBe('offline');
     // The restored update, then the room's generation from the server: both remote.
     expect(origins).toEqual([true, true]);
     expect(await serverText(server)).toBe('offline');
     expect(states.at(-1)).toMatchObject({ synced: true, hasUnconfirmedChanges: false });
-    expect(reloaded.getUnconfirmedUpdate()).toBeNull();
+    expect(reloaded.getUnconfirmedUpdates()).toEqual([]);
   });
 
   it('COLLAB-CLIENT-3.3 COLLAB-CLIENT-4.3 applies a restored update with the remote origin', () => {
@@ -369,12 +370,12 @@ describe('createRoomProvider', () => {
     const provider = open(serve(), {
       doc,
       connect: false,
-      unconfirmedUpdate: encodeStateAsUpdate(source),
+      unconfirmedUpdates: [encodeStateAsUpdate(source)],
     });
 
     expect(origins).toHaveLength(1);
     expect(provider.isRemoteOrigin(origins[0])).toBe(true);
-    expect(provider.getUnconfirmedUpdate()).not.toBeNull();
+    expect(provider.getUnconfirmedUpdates()).toHaveLength(1);
   });
 
   it('COLLAB-CLIENT-4.1 shares awareness and forgets remote states when the socket closes', async () => {

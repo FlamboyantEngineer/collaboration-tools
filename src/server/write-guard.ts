@@ -8,15 +8,15 @@ import {
   type Transaction,
 } from '@y/y';
 import type { RoomClock, RoomTimer } from '../protocol/clock.js';
-import type { RoomWriteChange, RoomWriteGuard } from './host/adapters.js';
+import type { RoomGuardAnswer, RoomWriteChange, RoomWriteGuard } from './host/adapters.js';
 
 /** A room's guard on its shadow document, which follows every change the room takes. */
 export interface ShadowGuard {
   /**
-   * Applies `update` to the shadow and asks the guard. A refusal, or a guard that throws, rebuilds
-   * the shadow from the room before it returns.
+   * Applies `update` to the shadow and asks the guard. A refusal of either kind, or a guard that
+   * throws, rebuilds the shadow from the room before it returns.
    */
-  check(change: RoomWriteChange, update: Uint8Array): boolean;
+  check(change: RoomWriteChange, update: Uint8Array): RoomGuardAnswer;
   /** Stops following the room and closes the guard. */
   destroy(): void;
 }
@@ -158,7 +158,7 @@ export function openShadowGuard(
     selfCheck.onRepair(reason);
   }
 
-  function decide(change: RoomWriteChange, update: Uint8Array): boolean {
+  function decide(change: RoomWriteChange, update: Uint8Array): RoomGuardAnswer {
     const { shadow, guard } = opened ?? reopen();
     const transaction = applyCapturing(shadow, update);
     return guard.check({ ...change, transaction });
@@ -183,13 +183,15 @@ export function openShadowGuard(
   room.on('update', follow);
   return {
     check(change, update) {
+      let answer: RoomGuardAnswer = false;
       try {
-        if (decide(change, update)) return true;
+        answer = decide(change, update);
+        if (answer === true) return true;
       } catch {
         // A guard that throws refuses, as a `check` that throws does.
       }
       rebuild();
-      return false;
+      return answer === 'conflict' ? 'conflict' : false;
     },
     destroy: () => {
       room.off('update', follow);

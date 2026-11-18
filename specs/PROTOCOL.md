@@ -6,7 +6,7 @@ The frames a client and a server exchange over one WebSocket per room. The proto
 
 ### COLLAB-PROTOCOL-1.1 - Message types
 
-`MESSAGE_TYPES` shall number the messages `sync` 0 (the y-protocols sync messages), `awareness` 1 (a y-protocols awareness update), `auth` 2, `queryAwareness` 3 (a request for every awareness state), `stateless` 5 and `storage` 6. A reader that meets a message type it does not know shall stop reading that frame, so a newer peer can add types. A sync message whose sync type is not step 1, step 2 or update shall be rejected without applying it: the server closes the socket as an unreadable frame (COLLAB-SERVER-2.4) and the client reports it.
+`MESSAGE_TYPES` shall number the messages `sync` 0 (the y-protocols sync messages), `awareness` 1 (a y-protocols awareness update), `auth` 2, `queryAwareness` 3 (a request for every awareness state), `stateless` 5, `storage` 6 and `refused` 7. A reader that meets a message type it does not know shall stop reading that frame, so a newer peer can add types. A sync message whose sync type is not step 1, step 2 or update shall be rejected without applying it: the server closes the socket as an unreadable frame (COLLAB-SERVER-2.4) and the client reports it.
 
 Implementation: `src/protocol/messages.ts`, `src/client/frames.ts`
 Verification: `src/protocol/messages.test.ts`, `src/client/frames.test.ts`
@@ -37,6 +37,13 @@ Verification: `src/protocol/frames.test.ts`
 A storage message shall be the subtype, a varUint, then one varUint. Subtype 0 (`STORAGE_SUBTYPES.status`) is the server's save status, whose value numbers `saved` 0, `unsaved` 1, `saving` 2 and `retrying` 3. Subtype 1 (`receiptRequest`) is a client's request, and subtype 2 (`receipt`) the server's answer, each carrying the request's id. `encodeStorageMessage(message)` shall write a whole storage frame, and `readStorageMessage(decoder)` shall read one after its message type, returning `null` for a subtype or status it does not know.
 
 Implementation: `src/protocol/messages.ts`
+Verification: `src/protocol/messages.test.ts`
+
+### COLLAB-PROTOCOL-1.6 - Refused messages
+
+A refused message tells a writer that the room did not take one of its updates and keeps it connected (COLLAB-SERVER-7.7). It shall be a varString reason, then a varUint8Array holding the refused update's content ids as Yjs `encodeContentIds` writes them, so the writer can tell which of its changes it was; it names nothing of any other writer's content. The one reason today is `conflict`. `encodeRefusedMessage(message)` shall write a whole refused frame, and `readRefusedMessage(decoder)` shall read one after its message type. A reader of an older version does not know the message type and stops reading the frame (COLLAB-PROTOCOL-1.1).
+
+Implementation: `src/protocol/messages.ts`, `src/client/frames.ts`
 Verification: `src/protocol/messages.test.ts`
 
 ## COLLAB-PROTOCOL-2 - Room URLs

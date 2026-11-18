@@ -12,9 +12,11 @@ function context(doc = new Doc()): FrameContext {
     awareness: new Awareness(doc),
     origin: {},
     onRemoteUpdate: vi.fn(),
+    withheld: () => null,
     onAuth: vi.fn(),
     onStateless: vi.fn(),
     onStorage: vi.fn(),
+    onRefused: vi.fn(),
   };
 }
 

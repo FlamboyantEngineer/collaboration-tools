@@ -13,7 +13,7 @@ Verification: `src/client/room-provider.test.ts`
 
 ### COLLAB-CLIENT-1.2 - Sync handshake and connection state
 
-The provider shall connect at once unless `connect` is `false`. On open it shall send a sync step 1 and, when it has one, its local awareness state; it shall answer the server's sync step 1 and apply the server's sync step 2 and updates with an origin of its own. `getState()` shall return the connection state: `status` (`connecting`, `connected` or `disconnected`), `access` (`pending` until the server grants access on the current socket, then `read-write` or `read-only`), `synced` (whether the current socket has received the server's sync step 2), `syncCount` (completed handshakes since creation), `hasUnconfirmedChanges`, `refusal`, `roomGeneration` (COLLAB-CLIENT-5.1), `closeCode` (the close code of the last socket that closed, `null` when the provider closed it) and `saveStatus` (COLLAB-CLIENT-5.2). A provider that has not connected shall report `disconnected`, `pending`, not synced and zero handshakes.
+The provider shall connect at once unless `connect` is `false`. On open it shall send a sync step 1 and, when it has one, its local awareness state; it shall answer the server's sync step 1, leaving out the content of its unconfirmed changes (COLLAB-CLIENT-3.4), and apply the server's sync step 2 and updates with an origin of its own. `getState()` shall return the connection state: `status` (`connecting`, `connected` or `disconnected`), `access` (`pending` until the server grants access on the current socket, then `read-write` or `read-only`), `synced` (whether the current socket has received the server's sync step 2), `syncCount` (completed handshakes since creation), `hasUnconfirmedChanges`, `refusedChanges` (how many local changes the room refused while keeping the provider connected, COLLAB-CLIENT-3.5), `refusal`, `roomGeneration` (COLLAB-CLIENT-5.1), `closeCode` (the close code of the last socket that closed, `null` when the provider closed it) and `saveStatus` (COLLAB-CLIENT-5.2). A provider that has not connected shall report `disconnected`, `pending`, not synced and zero handshakes.
 
 Implementation: `src/client/room-provider.ts`, `src/client/room-connection.ts`, `src/client/socket-session.ts`, `src/client/frames.ts`, `src/client/connection-state.ts`
 Verification: `src/client/room-provider.test.ts`
@@ -73,17 +73,37 @@ Verification: `src/client/room-provider.test.ts`
 
 ### COLLAB-CLIENT-3.2 - Resending lost echoes
 
-After each completed handshake, the provider shall send an update holding the content still unconfirmed, so a change whose echo was lost with a socket is confirmed. The server acknowledges such a replay to its sender even when it changes nothing.
+After each completed handshake, the provider shall send the changes still unconfirmed, one update for each (COLLAB-CLIENT-3.4), so a change whose echo was lost with a socket is confirmed. The server acknowledges such a replay to its sender even when it changes nothing.
 
 Implementation: `src/client/unconfirmed-updates.ts`, `src/client/room-connection.ts`
 Verification: `src/client/room-provider.test.ts`
 
 ### COLLAB-CLIENT-3.3 - Keeping unconfirmed changes across reloads
 
-`getUnconfirmedUpdate()` shall return an update holding the content of the document still unconfirmed (COLLAB-CLIENT-3.1), or `null` when none is. A provider created with `unconfirmedUpdate` shall, before it reports any state or connects, apply that update to the document with the origin it applies the server's updates with and track its content as unconfirmed, so the handshake and the resend after it send that content and `whenStored()` covers it.
+`getUnconfirmedUpdates()` shall return one update for each change still unconfirmed (COLLAB-CLIENT-3.4), oldest first, each holding that change's content alone, or an empty list when none is. A provider created with `unconfirmedUpdates` shall, before it reports any state or connects, apply those updates to the document in order with the origin it applies the server's updates with and track each as a change of its own, so the resend after the handshake sends them one by one and `whenStored()` covers them.
 
 Implementation: `src/client/room-provider.ts`, `src/client/unconfirmed-updates.ts`
 Verification: `src/client/room-provider.test.ts`
+
+### COLLAB-CLIENT-3.4 - Changes one by one
+
+The provider shall track its unconfirmed content as changes. A local update sent on an open socket as it is made shall be a change of its own; local updates made while no socket is open shall be one change from the first of them until 500 ms after it, so a change is a burst of typing, not a whole time offline. The resend after a handshake shall send each change as an update of its own, in the order they were made, and the provider's answer to the server's sync step 1 shall leave their content out, so the room's write rules decide on each change apart: the room takes those it allows, and refuses only one it does not, without taking the others down with it.
+
+Implementation: `src/client/unconfirmed-updates.ts`, `src/client/room-connection.ts`, `src/client/frames.ts`
+Verification: `src/server/merge-refusals.test.ts`, `src/client/room-provider.test.ts`
+
+### COLLAB-CLIENT-3.5 - Refused changes
+
+When the server sends a refused message (COLLAB-PROTOCOL-1.6), the provider shall stop tracking the refused update's content, which it shall never send again, count it in `refusedChanges`, and stay connected. Yjs cannot take content back out of a document, so the writer's document comes back to the room's content by being replaced:
+
+- **Fill.** The writer's later changes take their places after the refused change's, and the room needs those places to take them. When the refused change inserted anything, the provider shall send a fill first: the change's insertions as deleted content, holding none of their text, and none of its deletions. It shall then send again, one by one, the later changes of the same document, which the room dropped as incomplete while it lacked those places (COLLAB-SERVER-7.3). The fill is tracked like a change, so a reconnect sends it again until the room confirms it.
+- **Later changes.** A later change the room allows reaches it, the keys typed between the refused change and the reload included. Content of a later change that lies inside what the refused change inserted, such as text typed inside an item it added, arrives deleted with the fill: it is dropped with the refused change. A later change that the room refuses in turn is handled the same way.
+- **Reload.** When the refused change belongs to the document the room syncs with, the provider shall start a new document of the same garbage collection setting, sync it with the room from scratch on the same socket, and keep sending the previous document's local changes until then. Once the room's sync step 2 reaches the new document, `doc` shall be the new document, the provider shall stop sending the previous one's changes, and `onReload(listener)` listeners shall receive `{ reason, doc, previous }`. A change refused from a document a reload already replaced reloads nothing. The provider reads a previous document while it still holds unconfirmed changes; a host keeps it until then.
+
+A provider of an older version reads no refused message (COLLAB-PROTOCOL-1.1): it keeps the refused change unconfirmed and sends it again after each handshake, so its connection is cut off once the room's conflict limit is reached (COLLAB-SERVER-7.7).
+
+Implementation: `src/client/room-connection.ts`, `src/client/refused-changes.ts`, `src/client/unconfirmed-updates.ts`, `src/client/room-provider.ts`, `src/client/frames.ts`
+Verification: `src/server/merge-refusals.test.ts`
 
 ## COLLAB-CLIENT-4 - Awareness, stateless messages and lifetime
 

@@ -17,10 +17,14 @@ interface WriteRequest {
 
 /**
  * Whether an update may be applied: `refused` lists the top-level types the connection may not
- * change, and `incomplete` means the update builds on content the room lacks.
+ * change, `conflict` the types of an update the guard refused for its merge with the room
+ * (COLLAB-SERVER-7.7), and `incomplete` means the update builds on content the room lacks.
  */
 type WriteDecision =
-  { verdict: 'allowed' } | { verdict: 'refused'; types: string[] } | { verdict: 'incomplete' };
+  | { verdict: 'allowed' }
+  | { verdict: 'refused'; types: string[] }
+  | { verdict: 'conflict'; types: string[] }
+  | { verdict: 'incomplete' };
 
 function mayChange(rules: RoomWriteRules, type: string, capabilities: ReadonlySet<string>) {
   // The library's own metadata is server-only in every room.
@@ -58,6 +62,7 @@ export function checkWrite(rules: RoomWriteRules, request: WriteRequest): WriteD
     changes: analysis.changes,
   };
   if (rules.check && !isAllowed(rules.check, change)) return { verdict: 'refused', types };
-  if (request.guard && !request.guard.check(change, update)) return { verdict: 'refused', types };
-  return { verdict: 'allowed' };
+  const answer = request.guard ? request.guard.check(change, update) : true;
+  if (answer === 'conflict') return { verdict: 'conflict', types };
+  return answer === true ? { verdict: 'allowed' } : { verdict: 'refused', types };
 }
